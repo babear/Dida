@@ -1,8 +1,19 @@
 # 清单域（dida project）
 
-> 字段语义搬自已安装的 README，版本与校对规则见 `SKILL.md`。
->
-> 参数与取值一律跑 `dida project <cmd> --help`；本文只写它给不出的。
+> 什么时候读：要查/建/改清单、看清单字段、用 `project data` 或看板列时。
+> 参数以 `dida project <cmd> --help` 为准；本文写它给不出的。
+
+## 命令一览
+
+| 想做的事 | 命令 | 注意 |
+|---|---|---|
+| 列出清单 | `dida project list` | 收集箱不在其中 |
+| 清单详情 | `dida project get <projectId>` | |
+| 清单 + 未完成任务 + 看板列 | `dida project data <projectId>` | |
+| 成员 | `dida project members <projectId>` | |
+| 创建 / 更新 / 删除清单 | `dida project create` / `update` / `delete` | |
+| 文件夹分组 | `dida project group list/create/update/delete` | |
+| 看板列 | `dida project column list/create/update` | |
 
 ## 返回字段
 
@@ -20,17 +31,11 @@
 | `permission` | `read`、`comment`、`write` |
 | `kind` | `TASK` 或 `NOTE`；与任务 `kind`（`TEXT`/`NOTE`/`CHECKLIST`）不是一回事 |
 
-## 拉取清单内容
+## `project data`
 
-`project data <projectId> --json` 的根对象：
+根对象：`project`、`tasks`、`columns`。`tasks` 只含未完成。
 
-| 字段 | 含义 |
-|---|---|
-| `project` | 清单对象 |
-| `tasks` | **只含未完成任务** |
-| `columns` | 看板列 |
-
-要已完成或已放弃，用 [task.md](task.md) 里的 `task filter --status=-1,0,2`。
+收集箱：`project data inbox` 不返回 `project` 对象，任务的 `projectId` 是 `inbox1011141916`；`task get` / `task filter` 接受 `inbox` 和该 id 两种写法。
 
 ## 看板列
 
@@ -44,10 +49,10 @@
 | `sortOrder` | 看板上的顺序 |
 
 - **分栏与视图模式正交**：`viewMode: list` 的清单同样返回 `columns`（已实测）；判断有没有列看 `columns`，`viewMode` 不参与。
-- 命令只有 `column list` / `column create` / `column update`——**没有删除列的命令**。
-- **任务无法通过 CLI 归到某列**：`task create` / `task update` 没有 `--column`，任务上的 `columnId` 只读。详见 [task.md](task.md)。
+- 命令只有 `column list` / `column create` / `column update`——没有删除列的命令。
+- 任务无法通过 CLI 归到某列：`task create` / `task update` 没有 `--column`，任务上的 `columnId` 只读。见 [task.md](task.md)。
 
-## 其他
+## 分组与成员
 
 - 清单分组（文件夹）：`project group` 子命令。
-- 清单成员：`project members <projectId>`，其中的 `username` 供 `task assign --assignee` 使用。
+- 成员：`project members <projectId>`，其中的 `username` 供 `task assign --assignee` 使用。

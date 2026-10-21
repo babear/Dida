@@ -1,19 +1,56 @@
 # 任务域（dida task）
 
-> 字段语义搬自已安装的 README，版本与校对规则见 `SKILL.md`。
->
-> 参数与取值一律跑 `dida task <cmd> --help`；本文只写它给不出的。
+> 什么时候读：要查任务、写任务、看任务返回字段、用 `reminders` 或 `repeatFlag` 时。
+> 参数以 `dida task <cmd> --help` 为准；本文写它给不出的。
 
-## 能力缺口
+## 命令一览
 
-- **无法把任务（含笔记类）归到看板列**：`task create` / `task update` 都没有 `--column` 参数，任务上的 `columnId` 只能读、不能写。列本身归清单域，见 [project.md](project.md)。
-- **`task search` 的关键词是必需项**：不带关键词直接调用，API 返回 500，Node 以断言崩溃退出（`UV_HANDLE_CLOSING`，退出码 `3221226505`）。要列全量用 `project data` 或 `task filter`。
-- **重复规则只能改、不能清空**：`--repeat-from` 只接受 `0`/`1`/`2`，传 `none` 会报错退出；`--repeat ""` 会写入一个空的 `repeatFlag`，不是清除。
-- **`task filter` 在大清单上输出可达数百 KB**：先想清楚要哪些字段，必要时在本地过滤。
+| 想做的事 | 命令 | 注意 |
+|---|---|---|
+| 已知 ID，取一条 | `dida task get <projectId> <taskId>` | |
+| 列当前清单任务，要带看板列分组或只要未完成 | `dida project data <projectId>`（清单域） | 只返回未完成；见 [project.md](project.md) |
+| 列全量、全状态，或按 dueDate 筛 | `dida task filter --projects <id>` | 唯一能一次拿全状态；大清单输出可达数百 KB |
+| 按**完成时间**区间列已完成 | `dida task completed --projects <id> --start-date … --end-date …` | 区间按 `completedTime`；`filter` 的区间按 `dueDate`——两者不可互换（已实测） |
+| 按关键词找 | `dida task search <keywords>` | 关键词必填；空值会导致 API 500 与进程崩溃 |
+| 创建 | `dida task create` | |
+| 更新 | `dida task update <taskId> --id <taskId>` | 位置参数和 `--id` 都要给 |
+| 完成 | `dida task complete <projectId> <taskId>` | |
+| 批量完成 | `dida task complete-batch` | 同一清单最多 50 条；`--json` 输出 `{completed, failed}`，有失败时退出码 1 |
+| 删除 | `dida task delete <projectId> <taskId>` | |
+| 清单间移动 | `dida task move` | |
+| 分配 / 取消 | `dida task assign` / `dida task unassign` | `username` 取自 `project members` |
+| 评论 | `dida task comment list/add/delete` | |
 
-## 写入
+任务无法通过 CLI 归到看板列：`create` / `update` 没有 `--column`，任务上的 `columnId` 只读。列本身见 [project.md](project.md)。
 
-- `task update` 要同时给位置参数 `<taskId>` 和 `--id <taskId>`，两者缺一不可。
+收集箱：projectId 用字面量 `inbox`。`project data inbox` 不返回 `project` 对象，任务的 `projectId` 是 `inbox1011141916`；`task get` 与 `task filter` 两种写法都接受。
+
+## 读改验
+
+改任务前先取现状，改完再取一次复核；向用户汇报用复核结果。
+
+```powershell
+# 1. 找：收集箱里标题为「研究 matt github 项目」的任务
+$data = dida project data inbox --json | ConvertFrom-Json
+$task = $data.tasks | Where-Object { $_.title.Trim() -eq '研究 matt github 项目' }
+
+# 2. 读：取当前正文
+dida task get inbox $task.id --json
+
+# 3. 改：多行正文用 here-string
+$body = @'
+清洗后的第一行
+清洗后的第二行
+'@
+dida task update $task.id --id $task.id --project inbox --content $body
+
+# 4. 验：以这一步的输出为准
+dida task get inbox $task.id --json
+```
+
+PowerShell 若因执行策略拒绝未签名的 `dida.ps1`，把命令里的 `dida` 换成 `dida.cmd`。
+
+已完成的任务不在 `project data` 里；按标题找已完成的任务用 `dida task filter --status=2`。
 
 ## 返回字段
 
@@ -33,19 +70,19 @@
 | `priority` | `0` 无、`1` 低、`3` 中、`5` 高 | |
 | `reminders` | 提醒触发字符串数组 | 语法见下 |
 | `repeatFlag` | 重复规则 | 语法见下 |
-| `repeatFrom` | 重复起算方式 | 仅 `repeatFlag` 非空时被读取，否则是惰性字段 |
+| `repeatFrom` | 重复起算方式 | 仅 `repeatFlag` 非空时被读取 |
 | `completedTime` | 完成时间 | 仅已关闭任务可改，不可清除 |
 | `status` | `-1` 已放弃、`0` 未完成、`2` 已完成 | |
 | `items` | 检查事项 | 见下 |
 | `tags` | 标签 | |
-| `columnId` / `columnName` | 看板列 | **只读**；没有 CLI 参数可写 |
+| `columnId` / `columnName` | 看板列 | 只读；没有 CLI 参数可写 |
 | `parentId` / `childIds` | 父子任务关系 | |
 | `focusSummaries` | 专注汇总 | 见下 |
 | `assigneeUsername` | 负责人 | 通过 `task assign` 设置 |
 | `etag` | 服务端乐观锁 | 只读 |
 | `kind` | 任务类型：`TEXT`、`NOTE`、`CHECKLIST` | 与清单 `kind`（`TASK`/`NOTE`）不是一回事 |
 
-### `reminders` 语法
+## `reminders` 语法
 
 每项形如：
 
@@ -63,7 +100,7 @@
 | `TRIGGER;RELATED=END:-PT15M` | **结束时间**前 15 分钟 |
 | `TRIGGER:PT0S` | 准时 |
 
-### `repeatFlag` 语法
+## `repeatFlag` 与 `repeatFrom`
 
 - `RRULE:` 标准重复；`ERULE:` 自定义或高级重复。
 - 一条 `repeatFlag` 只带一种前缀：`RRULE:` 或 `ERULE:`。
@@ -76,7 +113,9 @@ ERULE:NAME=CUSTOM;BYDATE=20260325,20260330
 
 `repeatFrom` 只在 `repeatFlag` 非空时生效：`0` 按原截止日期、`1` 按完成日、`2` 按日历默认。
 
-### `items[]` 检查事项
+`--repeat-from` 只接受 `0`/`1`/`2`，传 `none` 会报错；`--repeat ""` 写入一个空的 `repeatFlag`，不是清除。
+
+## `items[]` 检查事项
 
 | 字段 | 含义 |
 |---|---|
@@ -86,12 +125,8 @@ ERULE:NAME=CUSTOM;BYDATE=20260325,20260330
 | `sortOrder` | 事项间排序 |
 | `startDate` / `isAllDay` / `timeZone` / `completedTime` | 可选的时间与完成信息 |
 
-### `focusSummaries[]`
+## `focusSummaries[]`
 
 可写（`task update`）：`estimatedDuration`（秒）、`estimatedPomo`（番茄数，最大 60）。
 
 只读：`pomoCount`、`pomoDuration`（秒）、`stopwatchDuration`（秒）。
-
-## 批量完成
-
-`task complete-batch --json` 输出 `{ "completed": [...], "failed": [...] }`；有未完成项时退出码为 `1`。
