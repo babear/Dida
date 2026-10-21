@@ -1,49 +1,47 @@
 ---
 name: dida-cli
-description: 通过 dida-cli 操作滴答清单的任务、清单、标签、习惯与专注。当用户提到 dida、dida-cli、滴答清单，或需要查询、创建、修改待办任务、清单、习惯打卡、番茄钟时使用；执行任何 dida 命令前，先读已安装包内的用法说明。
+description: dida-cli（滴答清单）：查询、创建、修改待办任务、清单、标签、习惯打卡与专注记录。用户提到 dida 或滴答清单时使用。
 ---
 
 # dida-cli
 
 滴答清单（DIDA）命令行工具，封装 [DIDA Open API v1](https://developer.dida365.com/docs#/openapi)。
 
-Install（`dida` 不存在时执行）：`npm i -g @suibiji/dida-cli`
+## 前置检查（每个会话首次操作前）
 
-## Start here
+1. `dida` 不存在 → `npm i -g @suibiji/dida-cli`
+2. `dida auth status`；未登录 → `dida auth login`（无浏览器环境用 `dida auth token <token>`）
+3. `dida --version` 应为 `0.1.14`——这是域文档标注的版本。不一致时告知用户 skill 需要更新。
 
-这是一个 discovery stub，不是用法说明。执行任何 `dida` 命令前：
+## 真相源
 
-1. 读**已安装版本自带**的用法说明——它随安装版本走，永不漂移。路径是全局包内的 README：
+按顺序取——前面的够用就不翻后面的：
 
-   `$(npm root -g)/@suibiji/dida-cli/README.md`
+1. `dida <command> --help`——参数与取值的唯一真相，随安装版本走。**执行任何命令前先跑它**，参数以它的输出为准。
+2. 本 skill 的域文档——`--help` 不写的跨命令知识：
+   - [references/task.md](references/task.md)：任务写操作、返回字段、`reminders`/`repeatFlag` 语法、能力缺口
+   - [references/project.md](references/project.md)：清单字段、`project data` 的返回范围、看板列与视图模式
+   - 其余域（习惯、专注、标签、倒数日、偏好）直接跑 `--help`，已完整覆盖。
+3. 已安装的 README——字段语义的原始出处。版本一致时以域文档为准；不一致时（前置检查第 3 步）以它为准，覆盖域文档的字段部分。
+   - 位置：`$(npm root -g)/@suibiji/dida-cli/README.md`，读「JSON 字段与命令对应关系」一节。
 
-   读完应能说出：要用的子命令、其必填参数、`--json` 输出的字段结构。任一说不清，就是没读到位。
+## 硬规则
 
-2. 确认已登录：`dida auth status`。未登录时 `dida auth login`（无浏览器环境用 `dida auth token <token>`）。
-3. 命令的精确参数一律以本地为准：`dida <command> --help`——版本匹配且精确，比 README 更可信。
+- **任务写操作后必须复核**：`dida task get <projectId> <taskId> --json`，确认字段真的落库，再向用户汇报。写命令的返回不等于最终状态。
+- 默认只给未完成内容。用户明确要已完成、已放弃，或指定时间段时才扩大范围。
+- 含逗号的参数值在 PowerShell 下加引号：`--status="-1,0,2"`，见 [references/powershell-arg-quoting.md](references/powershell-arg-quoting.md)。
 
-## 查询分流
+## 选哪个查询命令
 
-README 列出了每条命令，但不说面对哪种意图该挑哪条。看任务这件事有四条路：
+`--help` 只告诉你每条命令能收什么参数，不告诉你它们的边界。看任务有四种走法：
 
-| 意图 | 命令 |
-|---|---|
-| 某清单**当前待办**（含分组） | `dida project data <projectId> --json`（**只返回未完成任务**，另带 `columns`） |
-| 要**全部状态**（含已完成/已放弃） | `dida task filter --projects <projectId> --status=-1,0,2 --json` |
-| 按**完成时间段**列已完成 | `dida task completed --projects <projectId> --start-date … --end-date …` |
-| 按**关键词/标签**找 | `dida task search [keywords]` |
-
-含逗号的参数值在 PowerShell 下要加引号：`--status="-1,0,2"`。详见 [references/powershell-arg-quoting.md](references/powershell-arg-quoting.md)。
+| 意图 | 命令 | 边界 |
+|---|---|---|
+| 当前待办，且要保留看板列分组 | `dida project data <projectId> --json` | **只返回未完成**；唯一自带 `columns` 的列表接口 |
+| 全量列表（不带关键词），或按 dueDate 筛 | `dida task filter --projects <id> --status=-1,0,2 --json` | 唯一能一次拿全状态（`-1` 已放弃、`0` 未完成、`2` 已完成）；大清单输出可达数百 KB |
+| 按**完成时间**区间列已完成 | `dida task completed --projects <id> --start-date … --end-date …` | 区间按 `completedTime` 过滤；`task filter` 的区间按 `dueDate`——两者不可互换（已实测） |
+| 按关键词找 | `dida task search <keywords>` | 关键词必填；空关键词会崩（详见 task.md） |
 
 清单 ID 先取：`dida project list --json`。
 
-**收集箱是例外**：它不出现在 `project list` 里，projectId 直接用字面量 `inbox`：
-
-```
-dida project data inbox --json
-dida task filter --projects inbox --status=-1,0,2 --json
-```
-
-## 补充参考
-
-- [references/package-lookup.md](references/package-lookup.md) — 取不到 `npm root -g` 的输出时读它。
+**收集箱是例外**：它不出现在 `project list` 里，projectId 直接用字面量 `inbox`。
