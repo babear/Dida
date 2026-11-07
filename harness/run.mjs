@@ -53,7 +53,7 @@ async function runOne(options, id) {
     agentsPath: sandbox.agentsPath,
   });
 
-  const env = { ...sanitizeEnv(), CLAUDE_CONFIG_DIR: sandbox.configDir };
+  const env = { ...sanitizeEnv(process.env), CLAUDE_CONFIG_DIR: sandbox.configDir };
   env.PATH = `${sandbox.binDir}${path.delimiter}${env.PATH ?? ''}`;
   const session = await runSession({ argv, cwd: sandbox.root, env, tracePath });
 

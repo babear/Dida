@@ -40,7 +40,7 @@ run-<runId>/
 └── materials/             # scenario 素材（若有）
 ```
 
-会话以沙箱为 `cwd`、`CLAUDE_CONFIG_DIR` 指向沙箱的 `.claude/` 启动，并从父进程环境里剔除全部 `CLAUDE_*`。实测这样只暴露 `.claude/skills/` 里那一份 skill，`~/.claude/skills/` 下的同名软链接不参与竞争。
+会话以沙箱为 `cwd`、`CLAUDE_CONFIG_DIR` 指向沙箱的 `.claude/` 启动，并从父进程环境里剔除全部以 `CLAUDE` 开头的变量。实测这样只暴露 `.claude/skills/` 里那一份 skill，`~/.claude/skills/` 下的同名软链接不参与竞争。
 
 ## 调用方标记
 
@@ -53,6 +53,7 @@ run-<runId>/
 - `--agents` + `--agent dida-scenario`：工具面 `Skill`、`PowerShell`、`Read`、`Glob`、`Grep`、`Write`。`--allowedTools` 必须同时给，否则 `dontAsk` 会拒掉所有命令。
 - stdin 重定向到 `ignore`（即 `/dev/null`）。不关 stdin 时 `claude -p` 会等输入并挂死。
 - `--output-format stream-json --verbose` 写 `trace.ndjson`，`--no-session-persistence` 避免落进用户目录。
+- 环境：`sanitizeEnv` 剔除从父进程继承的全部 `CLAUDE` 开头变量，再显式设回 `CLAUDE_CONFIG_DIR`。**这不是完整的环境隔离**——CLI 会自行注入 `CLAUDECODE`、`CLAUDE_CODE_SESSION_ID` 等一批变量，与父进程传不传无关，清单与含义见 ADR-0008 的后果段。写断言时不要假设子进程环境干净。
 - 超时上限 15 分钟，超时后杀子进程并标 `timedOut`，沙箱保留。只杀直接子进程，尚未杀进程树——看门狗属于 #11。
 
 ## shim

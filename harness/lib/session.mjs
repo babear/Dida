@@ -39,10 +39,11 @@ export function resolveClaudeExe() {
   );
 }
 
-export function sanitizeEnv(parentEnv = process.env) {
+export function sanitizeEnv(parentEnv) {
   const env = {};
   for (const [key, value] of Object.entries(parentEnv)) {
-    if (key.toUpperCase().startsWith('CLAUDE_')) continue;
+    // 无下划线的 CLAUDECODE 也算 Claude Code 的标记变量，不能只按 CLAUDE_ 前缀判
+    if (key.toUpperCase().startsWith('CLAUDE')) continue;
     env[key] = value;
   }
   return env;

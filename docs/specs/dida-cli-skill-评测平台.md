@@ -86,7 +86,7 @@ harness 是仓库根目录下的一个 Node 模块目录，入口是一个可执
 ### 隔离
 
 - 沙箱是每次运行新建的临时目录（`%TEMP%/run-<id>/`），含 `.claude/skills/dida-cli/`（从 `--skill-path` 复制）、素材文件、只含 `ANTHROPIC_*` 键的 `settings.json`、以及 `bin/dida.cmd`。
-- 会话以沙箱目录为 `cwd`、以 `CLAUDE_CONFIG_DIR` 指向沙箱配置目录启动，并清除从父进程继承的全部 `CLAUDE_*` 环境变量。
+- 会话以沙箱目录为 `cwd`、以 `CLAUDE_CONFIG_DIR` 指向沙箱配置目录启动，并清除从父进程继承的全部以 `CLAUDE` 开头的环境变量（含无下划线的 `CLAUDECODE`）。CLI 自身注入的 `CLAUDECODE`、`CLAUDE_CODE_SESSION_ID` 等变量不受此控制，见 ADR-0008 的后果段。
 - 沙箱**不放仓库内**：实测放在仓库子目录会继承父目录的 `CLAUDE.md` 与父目录 `.claude/skills/` 下的 skill，后者的同名 skill 会与沙箱副本竞争。`CLAUDE_CODE_DISABLE_CLAUDE_MDS` 只阻断自动加载，agent 主动 `Read` 仍能读到父目录的 `CLAUDE.md`。
 - 沙箱路径写入 manifest 并打印在报告首行；运行失败时不删除沙箱，便于回看现场。
 - **沙箱只隔离工作目录，不隔离文件系统**：agent 仍可用绝对路径读取沙箱外的任何文件。已知风险与失效的缓解手段记在单独的 issue。
