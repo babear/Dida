@@ -1,4 +1,4 @@
-import { readCreated, removeCreated } from './created.mjs';
+import { readCreated } from './created.mjs';
 
 // 运行前检查：测试清单必须为空。不为空时只报告，绝不删。
 export function inspectProjects(projects, tasksByProject) {
@@ -29,7 +29,7 @@ export function planCleanup(created, tasksByProject) {
   return { aborted: false, deletes, foreign };
 }
 
-function listTasks(dida, projectId) {
+export function listTasks(dida, projectId) {
   const result = dida.run(['task', 'filter', '--projects', projectId, '--json']);
   if (result.exitCode !== 0) {
     throw new Error(`列清单 ${projectId} 的任务失败：${result.stderr.trim() || `exit ${result.exitCode}`}`);
@@ -38,11 +38,15 @@ function listTasks(dida, projectId) {
   return text ? JSON.parse(text) : [];
 }
 
+export function snapshotProjects(dida, projects) {
+  return Object.fromEntries(projects.map((id) => [id, listTasks(dida, id)]));
+}
+
 export function cleanRun({ dida, projects, createdFile }) {
   const created = readCreated(createdFile);
   if (created.length === 0) return { aborted: false, deleted: [], failed: [], foreign: [] };
 
-  const tasksByProject = Object.fromEntries(projects.map((id) => [id, listTasks(dida, id)]));
+  const tasksByProject = snapshotProjects(dida, projects);
   const plan = planCleanup(created, tasksByProject);
   if (plan.aborted) return { ...plan, deleted: [], failed: [] };
 
@@ -50,12 +54,10 @@ export function cleanRun({ dida, projects, createdFile }) {
   const failed = [];
   for (const { projectId, id } of plan.deletes) {
     const result = dida.run(['task', 'delete', projectId, id]);
-    if (result.exitCode === 0) {
-      deleted.push(id);
-      removeCreated(createdFile, id);
-    } else {
-      failed.push({ projectId, id, stderr: result.stderr.trim() });
-    }
+    if (result.exitCode === 0) deleted.push(id);
+    else failed.push({ projectId, id, stderr: result.stderr.trim() });
   }
+  // created.json 不清空：它是"这次运行建过什么"的取证材料，事后还要能翻。
+  // 已删掉的 id 下次再清场时在清单里找不到，planCleanup 会自然跳过。
   return { aborted: false, deleted, failed, foreign: [] };
 }

@@ -62,6 +62,3 @@ export function recordCreated(file, { argv, stdout, exitCode = 0 }) {
   return id;
 }
 
-export function removeCreated(file, id) {
-  writeCreated(file, readCreated(file).filter((entry) => entry.id !== id));
-}

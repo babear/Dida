@@ -9,23 +9,14 @@ const WRITE_SUBCOMMANDS = new Set([
   'complete-batch',
   'assign',
   'unassign',
-  'comment:add',
-  'comment:delete',
 ]);
 
+// task comment 的 add/delete 也是写调用；list 不是。
 export function classify(argv) {
-  const [group, sub] = argv ?? [];
+  const [group, sub, third] = argv ?? [];
   if (!group || !sub) return 'read';
-  if (sub === 'comment' && argv[2] === 'add') return 'write';
-  if (sub === 'comment' && argv[2] === 'delete') return 'write';
+  if (sub === 'comment') return third === 'add' || third === 'delete' ? 'write' : 'read';
   return WRITE_SUBCOMMANDS.has(sub) ? 'write' : 'read';
-}
-
-export function forwardTarget({ realDidaCmd }) {
-  if (!realDidaCmd) {
-    throw new Error('真 dida.cmd 路径缺失；转发不能降级成自递归');
-  }
-  return realDidaCmd;
 }
 
 // npm 生成的 .cmd 里始终有 `IF EXIST "%dp0%\node.exe"` 分支，但那个文件通常不存在。

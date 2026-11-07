@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { classify, forwardTarget } from '../harness/lib/shim.mjs';
+import { classify } from '../harness/lib/shim.mjs';
 
 test('写命令被认出来，读命令不会', () => {
   assert.equal(classify(['task', 'create', '--title', 'x']), 'write');
@@ -19,10 +19,8 @@ test('清单自身的写命令也算写', () => {
   assert.equal(classify(['project', 'list']), 'read');
 });
 
-test('转发目标取的是真 .cmd 的绝对路径，不是 PATH 里的名字', () => {
-  assert.equal(forwardTarget({ realDidaCmd: 'D:\\tools\\dida.cmd' }), 'D:\\tools\\dida.cmd');
-});
-
-test('没有真 CLI 路径时转发必须报错，不能退化成自递归', () => {
-  assert.throws(() => forwardTarget({ realDidaCmd: null }), /dida\.cmd/);
+test('评论的新增与删除是写，列表不是', () => {
+  assert.equal(classify(['task', 'comment', 'add', 'a', '--content', 'x']), 'write');
+  assert.equal(classify(['task', 'comment', 'delete', 'a', 'b']), 'write');
+  assert.equal(classify(['task', 'comment', 'list', 'a']), 'read');
 });

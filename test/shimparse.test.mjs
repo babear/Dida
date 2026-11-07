@@ -44,7 +44,7 @@ test('.cmd 里有真实存在的 node.exe 时优先用它', () => {
   assert.equal(parsed.program, path.join(path.dirname(process.execPath), 'node.exe'));
 });
 
-test('解析不出入口时返回 null，调用方据此退回原来的 CALL 转发', () => {
+test('解析不出入口时返回 null，调用方据此直接报错（不退回 CALL 转发）', () => {
   assert.equal(parseCmdShim('@ECHO off\r\nCALL "C:\\x\\dida.cmd" %*\r\n', 'C:\\x'), null);
 });
 

@@ -1,16 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 
-import { readCreated, recordCreated, removeCreated } from '../harness/lib/created.mjs';
-
-function tmpDir(t) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'created-test-'));
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  return dir;
-}
+import { tmpDir } from './helpers.mjs';
+import { readCreated, recordCreated } from '../harness/lib/created.mjs';
 
 test('task create 的结果把任务 id 记进 created.json', (t) => {
   const file = path.join(tmpDir(t), 'created.json');
@@ -70,10 +63,3 @@ test('created.json 不存在时读成空数组', (t) => {
   assert.deepEqual(readCreated(path.join(tmpDir(t), 'missing.json')), []);
 });
 
-test('取走一条记录后文件里不再有它', (t) => {
-  const file = path.join(tmpDir(t), 'created.json');
-  recordCreated(file, { argv: ['task', 'create', '--project', 'p1'], stdout: 'ID: 6aee00000000000000000006\n' });
-  recordCreated(file, { argv: ['task', 'create', '--project', 'p1'], stdout: 'ID: 6aee00000000000000000007\n' });
-  removeCreated(file, '6aee00000000000000000006');
-  assert.deepEqual(readCreated(file).map((e) => e.id), ['6aee00000000000000000007']);
-});

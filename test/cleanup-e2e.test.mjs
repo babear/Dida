@@ -1,16 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 
+import { tmpDir } from './helpers.mjs';
 import { cleanRun } from '../harness/lib/cleanup.mjs';
-
-function tmpDir(t) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cleanup-e2e-'));
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  return dir;
-}
 
 // 一个有状态的假清单：delete 会真的把任务移出去，好让"删完还剩什么"可验证。
 function fakeStore(initialTasks) {
@@ -46,7 +40,18 @@ test('本 run 创建的任务被删掉，清单回到空', (t) => {
   assert.equal(result.aborted, false);
   assert.deepEqual(result.deleted, ['aaaa00000000000000000001']);
   assert.deepEqual(store.remaining(), []);
-  assert.deepEqual(JSON.parse(fs.readFileSync(createdFile, 'utf8')), []);
+});
+
+test('清场后 created.json 仍保留本 run 建过的账，用于事后取证', (t) => {
+  const createdFile = path.join(tmpDir(t), 'created.json');
+  fs.writeFileSync(createdFile, JSON.stringify([{ id: 'aaaa00000000000000000001', projectId: PROJECT, title: 'x' }]));
+  const store = fakeStore([{ id: 'aaaa00000000000000000001', title: 'x' }]);
+
+  cleanRun({ dida: store, projects: [PROJECT], createdFile });
+
+  assert.deepEqual(JSON.parse(fs.readFileSync(createdFile, 'utf8')), [
+    { id: 'aaaa00000000000000000001', projectId: PROJECT, title: 'x' },
+  ]);
 });
 
 test('清单里预置一条非本 run 创建的任务时，harness 停止，那条任务仍在', (t) => {

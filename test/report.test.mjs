@@ -29,17 +29,18 @@ const MANIFEST = {
 };
 
 test('报告首行同时给出 skill 指纹、模型与沙箱绝对路径', () => {
-  const header = renderHeader(MANIFEST);
-  assert.equal(header.split('\n').length, 1);
-  assert.match(header, /a1b2c3d4e5f6/);
-  assert.match(header, /deepseek-v4\.1-flash/);
-  assert.match(header, /C:\\Users\\Charles\\AppData\\Local\\Temp\\run-/);
+  const report = renderReport(MANIFEST);
+  const firstLine = report.split('\n')[0];
+  assert.match(firstLine, /a1b2c3d4e5f6/);
+  assert.match(firstLine, /deepseek-v4\.1-flash/);
+  assert.match(firstLine, /C:\\Users\\Charles\\AppData\\Local\\Temp\\run-/);
 });
 
-test('报告首行不出现在文件的第二行之后——它是第一行', () => {
+test('scenario 与 run 标识在首行之后的标题行，不与首行抢位置', () => {
   const report = renderReport(MANIFEST);
-  assert.equal(report.split('\n')[0], `# ${MANIFEST.scenario}  ${MANIFEST.run}`);
-  assert.equal(report.split('\n')[2], renderHeader(MANIFEST));
+  const lines = report.split('\n');
+  assert.match(lines[0], /sandbox C:\\/);
+  assert.match(lines[1], new RegExp(MANIFEST.scenario));
 });
 
 test('报告列出本次会话在测试清单里创建的全部任务 id', () => {
@@ -80,6 +81,44 @@ test('报告区分清场删掉的任务与清单里未记账的任务', () => {
 test('git 处于 dirty 状态时报告里标出来', () => {
   const header = renderHeader({ ...MANIFEST, skill: { ...MANIFEST.skill, git: { rev: '497093f', dirty: true } } });
   assert.match(header, /dirty/);
+});
+
+test('清场读账本出错时，报告写明原因而不是显示成删除 0 条', () => {
+  const report = renderReport({
+    ...MANIFEST,
+    cleanup: { deleted: [], failed: [], foreign: [], error: 'created.json 不是合法 JSON' },
+  });
+  assert.match(report, /created\.json 不是合法 JSON/);
+});
+
+test('报告写出三层模型信息：CLI 自报、真实映射、代理地址', () => {
+  const manifest = {
+    ...MANIFEST,
+    model: {
+      requested_alias: 'ccs-claude-p23e2e3--deepseek-v4.1-flash[1m]',
+      provider: 'http://127.0.0.1:15721',
+      alias_mapping: {
+        sonnet: { model: 'ccs-claude-p23e2e3--deepseek-v4.1-flash[1M]', name: 'deepseek-v4.1-flash' },
+        opus: { model: 'ccs-claude-p23e2e3--deepseek-v4.1-flash[1M]', name: 'deepseek-v4.1-flash' },
+      },
+    },
+  };
+  const report = renderReport(manifest);
+  assert.match(report, /http:\/\/127\.0\.0\.1:15721/);
+  assert.match(report, /sonnet/);
+  assert.match(report, /opus/);
+});
+
+test('报告写明沙箱是保留还是已删除', () => {
+  assert.match(renderReport({ ...MANIFEST, sandboxRetained: true }), /保留/);
+  assert.match(renderReport({ ...MANIFEST, sandboxRetained: false }), /已删除/);
+});
+
+test('报告写明调用日志与轨迹是否对得上', () => {
+  const ok = renderReport({ ...MANIFEST, calls: { ...MANIFEST.calls, crossCheck: { calls: 12, shapeCalls: 10, consistent: true } } });
+  const bad = renderReport({ ...MANIFEST, calls: { ...MANIFEST.calls, crossCheck: { calls: 3, shapeCalls: 10, consistent: false } } });
+  assert.match(ok, /对得上/);
+  assert.match(bad, /绕过/);
 });
 
 test('摘要给人读：一段话说完这次测了什么、跑了多少、建了什么', () => {

@@ -37,8 +37,7 @@ const stderr = result.stderr ?? '';
 process.stdout.write(stdout);
 process.stderr.write(stderr);
 
-if (kind === 'write' && argv[0] === 'task' && argv[1] === 'create') {
-  recordCreated(createdFile, { argv, stdout, exitCode: result.status ?? 1, stderr });
-}
+// recordCreated 自己只认 task create 且成功的调用；其它调用原样略过。
+recordCreated(createdFile, { argv, stdout, exitCode: result.status ?? 1, stderr });
 
 process.exit(result.status ?? 1);

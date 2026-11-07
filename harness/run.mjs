@@ -9,9 +9,9 @@ import { parseCmdShim } from './lib/shim.mjs';
 import { buildSessionArgv, runSession, parseTranscript, sanitizeEnv, summarizeTranscript } from './lib/session.mjs';
 import { defaultSettingsPath, ensureRunsDir, gitState, modelInfo, runId } from './lib/provenance.mjs';
 import { listScenarios, loadScenario } from './lib/scenario.mjs';
-import { parseCallLog } from './lib/calllog.mjs';
+import { crossCheck, parseCallLog } from './lib/calllog.mjs';
 import { readCreated } from './lib/created.mjs';
-import { cleanRun, inspectProjects } from './lib/cleanup.mjs';
+import { cleanRun, inspectProjects, snapshotProjects } from './lib/cleanup.mjs';
 import { resolveTestProjects } from './lib/projects.mjs';
 import { renderReport } from './lib/report.mjs';
 
@@ -29,6 +29,10 @@ function parseArgs(argv) {
   };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
+    if (arg === '--help' || arg === '-h') {
+      options.help = true;
+      continue;
+    }
     const next = () => {
       i += 1;
       if (i >= argv.length) throw new Error(`missing value for ${arg}`);
@@ -64,16 +68,11 @@ function realDida() {
 }
 
 function projectsSnapshot(dida, projects) {
-  const tasksByProject = {};
-  for (const projectId of projects) {
-    const result = dida.run(['task', 'filter', '--projects', projectId, '--json']);
-    if (result.exitCode !== 0) {
-      throw new Error(`读清单 ${projectId} 失败：${result.stderr.trim() || `exit ${result.exitCode}`}`);
-    }
-    const text = result.stdout.trim();
-    tasksByProject[projectId] = text ? JSON.parse(text) : [];
+  try {
+    return snapshotProjects(dida, projects);
+  } catch (error) {
+    throw new Error(`读测试清单失败：${error.message}`);
   }
-  return tasksByProject;
 }
 
 async function runOne(options, id, projects) {
@@ -133,7 +132,12 @@ async function runOne(options, id, projects) {
       stderr: session.stderr.slice(0, 4000),
     },
     transcript: { path: transcriptPath, events: events.length, toolCalls: summary.toolCalls.length },
-    calls: { path: callLogPath, total: calls.length, unparseable: calls.filter((c) => c.unparseable).length },
+    calls: {
+      path: callLogPath,
+      total: calls.length,
+      unparseable: calls.filter((c) => c.unparseable).length,
+      crossCheck: crossCheck(calls, summary.toolCalls),
+    },
     created: readCreated(createdFile),
     testProjects: projects,
     callerMarker: sandbox.callerMarker,
@@ -152,6 +156,19 @@ function writeReport(runDir, manifest) {
 
 async function main() {
   const options = parseArgs(process.argv.slice(2));
+  if (options.help) {
+    console.log(`用法：
+  node harness/run.mjs [--scenario <id>] [--skill-path <dir>] [--settings <file>] [--keep-sandbox] [--hold]
+  node harness/run.mjs --clean <runId>
+
+  --scenario <id>     只跑这一条 scenario（默认全部）
+  --skill-path <dir>  复制进沙箱的 skill 目录（默认 skills/dida-cli）
+  --settings <file>   取 ANTHROPIC_* 键的来源（默认 ~/.claude/settings.json）
+  --keep-sandbox      成功时也保留沙箱
+  --hold              跑完不清场，留现场
+  --clean <runId>     只按该 run 的 created.json 删除任务，然后退出`);
+    return;
+  }
   const projects = resolveTestProjects();
   const dida = realDida();
 
@@ -209,16 +226,31 @@ async function main() {
     const { run, runDir, sandbox, manifest, session, createdFile } = await runOne(options, id, projects);
     const sessionCompleted = session.exitCode === 0 && !session.timedOut;
 
-    // 清场只按 created.json 删；失败现场默认保留，--clean 显式收尾。
-    const cleanup = options.hold
-      ? { aborted: false, deleted: [], failed: [], foreign: [] }
-      : cleanRun({ dida: realDida(), projects, createdFile });
     const retained = !sessionCompleted || options.keepSandbox || options.hold;
+
+    // 先把会话事实落盘，再动清单：清场读账本出错时，manifest 与 report 必须已经在了。
+    writeManifest(runDir, { ...manifest, cleanup: null, sandboxRetained: retained });
+
+    // 只按 created.json 删。会话失败时连任务一起保留现场（ADR-0006），由 --clean 显式收尾。
+    let cleanup;
+    try {
+      cleanup = options.hold || !sessionCompleted
+        ? { aborted: false, deleted: [], failed: [], foreign: [], deferred: true }
+        : cleanRun({ dida: realDida(), projects, createdFile });
+    } catch (error) {
+      cleanup = { aborted: false, deleted: [], failed: [], foreign: [], error: error.message };
+    }
     const finalManifest = { ...manifest, cleanup, sandboxRetained: retained };
     writeManifest(runDir, finalManifest);
     writeReport(runDir, finalManifest);
     if (!retained) fs.rmSync(sandbox.root, { recursive: true, force: true });
-    if (!sessionCompleted || cleanup.aborted || cleanup.failed.length > 0) failures += 1;
+    if (!sessionCompleted || cleanup.aborted || cleanup.error || cleanup.failed.length > 0) failures += 1;
+
+    // 清场没收拾干净时，后面的 scenario 会在一条脏清单上开跑，结论不可归因——直接停。
+    if (cleanup.aborted || cleanup.error || cleanup.failed.length > 0) {
+      console.error(`清场未完成，停止后续 scenario；用 --clean ${run} 收尾后再跑。`);
+      break;
+    }
 
     console.log(`${sessionCompleted ? 'COMPLETED' : 'INCOMPLETE'} ${id}  run=${run}`);
     console.log(`  skill sha256=${manifest.skill.sha256.slice(0, 16)} files=${manifest.skill.files} git=${manifest.skill.git.rev?.slice(0, 12)}${manifest.skill.git.dirty ? ' (dirty)' : ''}`);
@@ -227,7 +259,7 @@ async function main() {
     console.log(`  transcript=${path.relative(repoRoot, manifest.transcript.path)} events=${manifest.transcript.events} toolCalls=${manifest.transcript.toolCalls}`);
     console.log(`  calls=${path.relative(repoRoot, manifest.calls.path)} total=${manifest.calls.total}`);
     console.log(`  created=${manifest.created.length} 条${manifest.created.length ? '：' + manifest.created.map((e) => e.id).join('、') : ''}`);
-    console.log(`  cleanup deleted=${cleanup.deleted.length} failed=${cleanup.failed.length}${cleanup.aborted ? ` 已停止（${cleanup.foreign.length} 条未记账）` : ''}`);
+    console.log(`  cleanup deleted=${cleanup.deleted.length} failed=${cleanup.failed.length}${cleanup.aborted ? ` 已停止（${cleanup.foreign.length} 条未记账）` : ''}${cleanup.deferred ? ` 未清场（用 --clean ${run} 收尾）` : ''}`);
     console.log(`  caller marker=${manifest.callerMarker}`);
     console.log(`  run dir=${path.relative(repoRoot, runDir)}`);
     if (!sessionCompleted) console.log(`  session exit=${session.exitCode} timedOut=${session.timedOut}`);

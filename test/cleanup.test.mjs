@@ -1,16 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 
+import { tmpDir } from './helpers.mjs';
 import { cleanRun, inspectProjects, planCleanup } from '../harness/lib/cleanup.mjs';
-
-function tmpDir(t) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cleanup-test-'));
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
-  return dir;
-}
 
 function fakeDida(results) {
   const calls = [];

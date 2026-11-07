@@ -33,7 +33,7 @@ npm run test:unit     # lib 层单元测试，不烧 API
 2. **只删 `created.json` 里记录的 id**。shim 每建成一条任务就追加一行，清场只按这份账本删。
 3. **清单里出现未记账的任务就整单放弃**。停下、报出它、什么都不删。
 
-失败现场默认保留（沙箱与 `runs/<runId>/` 都在）。确认完用 `--clean <runId>` 收尾。
+失败现场默认保留：沙箱、`runs/<runId>/` 与**本 run 建的任务**都不动（ADR-0006）。确认完用 `--clean <runId>` 收尾。会话正常结束后才自动清场；`--hold` 让正常结束的运行也保留。
 
 ### 环境变量
 
@@ -43,6 +43,7 @@ npm run test:unit     # lib 层单元测试，不烧 API
 |---|---|
 | `CLAUDE_EXE` | `claude` 可执行文件路径。不设时依次尝试 `<node 目录>/node_modules/@anthropic-ai/claude-code/bin/claude.exe`、`<node 目录>/../node_global/…`、`npm prefix -g` 下的同一路径；全都找不到则报错退出 |
 | `DIDA_CMD` | 真 `dida.cmd` 的绝对路径。不设时从 `PATH` 里找第一个 `dida.cmd`；找不到则报错退出（不会退化成自递归 shim） |
+| `DIDA_TEST_PROJECTS` | 测试清单 id，逗号分隔。不设时用 `Test_1` 与 `Test_2`（见 `harness/lib/projects.mjs`）。覆盖成空值会退回默认 |
 
 ## scenario
 
