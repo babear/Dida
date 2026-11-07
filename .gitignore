@@ -1,1 +1,5 @@
 .claude/settings.local.json*
+
+# 评测产物与本地数据备份，含任务正文与可能的凭据，不进版本控制
+runs/
+.backup/

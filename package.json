@@ -1,0 +1,8 @@
+{
+  "name": "dida-cli-skill-harness",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node harness/run.mjs"
+  }
+}
