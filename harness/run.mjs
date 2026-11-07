@@ -4,11 +4,12 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { createSandbox, SKILL_NAME } from './lib/sandbox.mjs';
-import { buildSessionArgv, runSession, parseTrace, sanitizeEnv, summarizeTrace } from './lib/session.mjs';
+import { buildSessionArgv, runSession, parseTranscript, sanitizeEnv, summarizeTranscript } from './lib/session.mjs';
 import { defaultSettingsPath, ensureRunsDir, gitState, modelInfo, runId } from './lib/provenance.mjs';
 import { listScenarios, loadScenario } from './lib/scenario.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const AGENTS_SOURCE_PATH = path.join(repoRoot, 'harness', 'agents.json');
 
 function parseArgs(argv) {
   const options = {
@@ -35,19 +36,20 @@ function parseArgs(argv) {
 
 async function runOne(options, id) {
   const scenario = loadScenario(repoRoot, id);
-  const run = runId();
+  const runKey = runId();
   const runsDir = ensureRunsDir(repoRoot);
-  const runDir = path.join(runsDir, run);
+  const runDir = path.join(runsDir, runKey);
   fs.mkdirSync(runDir, { recursive: true });
 
   const sandbox = createSandbox({
-    runId: run,
+    runId: runKey,
     skillPath: options.skillPath,
+    agentsSourcePath: AGENTS_SOURCE_PATH,
     scenario,
     settingsPath: options.settingsPath,
   });
 
-  const tracePath = path.join(runDir, 'trace.ndjson');
+  const transcriptPath = path.join(runDir, 'trace.ndjson');
   const argv = buildSessionArgv({
     prompt: scenario.prompt,
     agentsPath: sandbox.agentsPath,
@@ -55,15 +57,15 @@ async function runOne(options, id) {
 
   const env = { ...sanitizeEnv(process.env), CLAUDE_CONFIG_DIR: sandbox.configDir };
   env.PATH = `${sandbox.binDir}${path.delimiter}${env.PATH ?? ''}`;
-  const session = await runSession({ argv, cwd: sandbox.root, env, tracePath });
+  const session = await runSession({ argv, cwd: sandbox.root, env, transcriptPath });
 
-  const events = parseTrace(tracePath);
-  const summary = summarizeTrace(events);
+  const events = parseTranscript(transcriptPath);
+  const summary = summarizeTranscript(events);
   const git = gitState(repoRoot);
   const sourceEnv = sandbox.anthropicEnv;
 
   const manifest = {
-    run,
+    run: runKey,
     scenario: id,
     sandbox: sandbox.root,
     skill: {
@@ -72,7 +74,7 @@ async function runOne(options, id) {
       files: sandbox.skillFingerprint.files,
       git,
     },
-    model: { ...modelInfo(sourceEnv), requested_alias: summary.modelAlias },
+    model: modelInfo(sourceEnv, summary.modelAlias),
     session: {
       exitCode: session.exitCode,
       timedOut: session.timedOut,
@@ -82,11 +84,11 @@ async function runOne(options, id) {
       costUsd: summary.costUsd,
       stderr: session.stderr.slice(0, 4000),
     },
-    trace: { path: tracePath, events: events.length, toolCalls: summary.toolCalls.length },
-    marker: sandbox.callerMarker,
+    transcript: { path: transcriptPath, events: events.length, toolCalls: summary.toolCalls.length },
+    callerMarker: sandbox.callerMarker,
   };
 
-  return { run, runDir, sandbox, manifest, session };
+  return { run: runKey, runDir, sandbox, manifest, session };
 }
 
 function writeManifest(runDir, manifest) {
@@ -112,10 +114,10 @@ async function main() {
     if (!sessionCompleted) failures += 1;
     console.log(`${sessionCompleted ? 'COMPLETED' : 'INCOMPLETE'} ${id}  run=${run}`);
     console.log(`  skill sha256=${manifest.skill.sha256.slice(0, 16)} files=${manifest.skill.files} git=${manifest.skill.git.rev?.slice(0, 12)}${manifest.skill.git.dirty ? ' (dirty)' : ''}`);
-    console.log(`  model=${manifest.model.resolved_model_name ?? manifest.model.requested_alias} provider=${manifest.model.provider}`);
+    console.log(`  model alias=${manifest.model.requested_alias} provider=${manifest.model.provider}（别名不等于实际执行模型，真实映射见 manifest.model.alias_mapping）`);
     console.log(`  sandbox=${sandbox.root}${retained ? ' (retained)' : ' (removed)'}`);
-    console.log(`  trace=${path.relative(repoRoot, manifest.trace.path)} events=${manifest.trace.events} toolCalls=${manifest.trace.toolCalls}`);
-    console.log(`  marker=${manifest.marker}`);
+    console.log(`  transcript=${path.relative(repoRoot, manifest.transcript.path)} events=${manifest.transcript.events} toolCalls=${manifest.transcript.toolCalls}`);
+    console.log(`  caller marker=${manifest.callerMarker}`);
     console.log(`  run dir=${path.relative(repoRoot, runDir)}`);
     if (!sessionCompleted) console.log(`  session exit=${session.exitCode} timedOut=${session.timedOut}`);
   }

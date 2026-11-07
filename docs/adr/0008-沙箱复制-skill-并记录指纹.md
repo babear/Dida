@@ -1,6 +1,6 @@
 # ADR-0008：每次运行把 skill 复制进沙箱并记录内容指纹
 
-- 状态：接受
+- 状态：接受（2026-11-07 修订：环境清理口径由 `CLAUDE_*` 改为 `CLAUDE` 开头以覆盖无下划线的 `CLAUDECODE`；模型记录改为 `requested_alias` + `alias_mapping` + `provider`，不再单列 `resolved_model`）
 - 日期：2026-11-06
 
 ## 背景
@@ -15,7 +15,7 @@
 
 沙箱的 `settings.json` 只写入源 `settings.json` 中所有 `ANTHROPIC_*` 键，其余（模型选择器、语言、更新器开关）一律不带。会话以 `CLAUDE_CONFIG_DIR` 指向沙箱配置目录启动，并清掉从父进程继承的全部以 `CLAUDE` 开头的环境变量（含无下划线的 `CLAUDECODE`）。
 
-模型记录三层并标注可信度：`requested_alias`（CLI 自报，实为别名）、`resolved_model`（从 `ANTHROPIC_DEFAULT_*` 读到的真实映射）、`provider`（代理地址）。
+模型记录并标注可信度：`requested_alias`（CLI 自报，实为别名）、`provider`（代理地址），以及 `alias_mapping`（四条 `ANTHROPIC_DEFAULT_*` 别名各映射到什么模型）。不单列一个「解析出的模型」——本机的四条别名全部指向同一个中转站模型，挑其中一条当作「实际模型」会是误导；真实执行模型只能靠 `alias_mapping` 对照本次 `requested_alias` 反查。
 
 ## 考虑过的方案
 
@@ -27,6 +27,6 @@
 
 - 每次运行多一次目录复制，成本可忽略。
 - 任一历史报告都能反推出当时测的是哪一份 skill，即使源码已经改动。
-- 改了默认模型后历史结果不可比，manifest 里的 `resolved_model` 是唯一可查的凭据。
+- 改了默认模型后历史结果不可比，manifest 里的 `alias_mapping` 是唯一可查的凭据。
 - **清理只覆盖继承的部分，不保证子进程环境干净。** 实测 `claude -p` 会自行注入 `CLAUDECODE`、`CLAUDE_CODE_CHILD_SESSION`、`CLAUDE_CODE_SESSION_ID`、`CLAUDE_CODE_SESSION_ATTENDED`、`CLAUDE_PID`、`CLAUDE_CODE_ENTRYPOINT`、`CLAUDE_CODE_AGENT`、`CLAUDE_CODE_MESSAGING_*` 等变量，父进程传不传都一样。这是 CLI 内部构造子会话环境的硬编码行为，harness 无法消除。因此"沙箱环境干净"不能作为断言的前提。
 - `CLAUDECODE` 在 CLI 里只参与嵌套会话判定（跳过 prompt 历史、关闭 BYOC 资源看门狗）与遥测上下文，不改变工具面或行为策略。实测保留与剔除两种情形下 `system:init` 的工具面、slash_commands、模型、cwd 与最终结果完全一致，所以把它纳入剔除清单是判据与文档口径的统一，没有行为收益。

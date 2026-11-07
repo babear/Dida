@@ -1,3 +1,3 @@
 {
-  "prompt": "请用 dida-cli 这个 skill。先读一读 materials/plan.md 里的计划，然后只回答两件事：这份计划要落成任务的话该建成几条、分别叫什么标题。不要调用 dida，不要创建任何任务。"
+  "prompt": "请用 dida-cli 这个 skill。先读一读 materials/plan.md 里的计划，然后用 dida 查一下 Test_1 清单里现在有几条任务，最后只回答两件事：该清单现在有几条任务、这份计划要落成任务的话该建成几条。不要创建、修改或删除任何任务。"
 }

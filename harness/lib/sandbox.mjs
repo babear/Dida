@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { TOOL_FACE } from './session.mjs';
+import { toolFaceOf } from './session.mjs';
 
 export const SKILL_NAME = 'dida-cli';
 
@@ -35,16 +35,6 @@ export function pickAnthropicEnv(settings) {
   return Object.fromEntries(
     Object.entries(env).filter(([key]) => key.startsWith('ANTHROPIC_')),
   );
-}
-
-export function buildAgentDefinition() {
-  return {
-    'dida-scenario': {
-      description: '执行一条评测 scenario 的一次性被测 agent',
-      prompt: '你是被测 agent。按用户的要求使用你可用的工具完成任务。',
-      tools: TOOL_FACE,
-    },
-  };
 }
 
 export const CALLER_MARKER_HEADING = '调用方标记';
@@ -79,8 +69,8 @@ function writePassthroughShim(binDir, realDidaCmd) {
   );
 }
 
-export function createSandbox({ runId, skillPath, scenario, settingsPath, tempRoot = os.tmpdir() }) {
-  const root = path.join(tempRoot, `run-${runId}`);
+export function createSandbox({ runId, skillPath, agentsSourcePath, scenario, settingsPath }) {
+  const root = path.join(os.tmpdir(), `run-${runId}`);
   const configDir = path.join(root, '.claude');
   const binDir = path.join(root, 'bin');
   const sandboxSkillPath = path.join(configDir, 'skills', SKILL_NAME);
@@ -100,7 +90,9 @@ export function createSandbox({ runId, skillPath, scenario, settingsPath, tempRo
   );
 
   const agentsPath = path.join(root, 'agents.json');
-  fs.writeFileSync(agentsPath, JSON.stringify(buildAgentDefinition(), null, 2));
+  fs.copyFileSync(agentsSourcePath, agentsPath);
+  // 定义文件是唯一事实源，坏掉要在建沙箱时就报，而不是等 claude -p 起来后从 stderr 里猜
+  toolFaceOf(agentsPath);
 
   writePassthroughShim(binDir, resolveRealDidaCmd());
 
@@ -112,7 +104,6 @@ export function createSandbox({ runId, skillPath, scenario, settingsPath, tempRo
     root,
     configDir,
     binDir,
-    skillPath: sandboxSkillPath,
     agentsPath,
     callerMarker: callerMarker(runId),
     skillFingerprint,

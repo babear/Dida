@@ -1,0 +1,7 @@
+{
+  "dida-scenario": {
+    "description": "执行一条评测 scenario 的一次性被测 agent",
+    "prompt": "你是被测 agent。按用户的要求使用你可用的工具完成任务。",
+    "tools": ["Skill", "PowerShell", "Read", "Glob", "Grep", "Write"]
+  }
+}

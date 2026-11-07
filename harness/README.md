@@ -20,6 +20,15 @@ npm test
 
 **当前判定口径**：只看会话是否正常退出（`COMPLETED` / `INCOMPLETE`）。结局断言与过程断言分别属于 #7 与 #8，接上之后才构成 scenario 的通过或失败。
 
+### 环境变量
+
+两个逃生口，在自动探测失败时使用：
+
+| 变量 | 作用 |
+|---|---|
+| `CLAUDE_EXE` | `claude` 可执行文件路径。不设时依次尝试 `<node 目录>/node_modules/@anthropic-ai/claude-code/bin/claude.exe`、`<node 目录>/../node_global/…`、`npm prefix -g` 下的同一路径；全都找不到则报错退出 |
+| `DIDA_CMD` | 真 `dida.cmd` 的绝对路径。不设时从 `PATH` 里找第一个 `dida.cmd`；找不到则报错退出（不会退化成自递归 shim） |
+
 ## scenario
 
 `scenarios/<id>/scenario.json` 目前只有 `prompt` 一个字段，是被测 agent 能看到的唯一输入。同目录的 `materials/`（可选）会整体复制进沙箱的 `materials/`。
@@ -35,16 +44,18 @@ run-<runId>/
 ├── .claude/
 │   ├── settings.json      # 只含源 settings.json 的 ANTHROPIC_* 键
 │   └── skills/dida-cli/   # 从 --skill-path 整体复制，末尾追加调用方标记
-├── agents.json            # --agents 的定义，工具面限定
+├── agents.json            # 从 harness/agents.json 复制，工具面限定
 ├── bin/dida.cmd           # 前置到 PATH 的透传 shim
 └── materials/             # scenario 素材（若有）
 ```
+
+`harness/agents.json` 是 `--agents` 的定义文件，在仓库里，有 diff、能 review、能回滚（选 `--agents` 的理由见 `docs/specs/dida-cli-skill-评测平台.md` 的「会话启动契约」）。运行时原样复制进沙箱，不在代码里拼装。
 
 会话以沙箱为 `cwd`、`CLAUDE_CONFIG_DIR` 指向沙箱的 `.claude/` 启动，并从父进程环境里剔除全部以 `CLAUDE` 开头的变量。实测这样只暴露 `.claude/skills/` 里那一份 skill，`~/.claude/skills/` 下的同名软链接不参与竞争。
 
 ## 调用方标记
 
-每次运行在沙箱副本的 `SKILL.md` 末尾追加一段 `## 调用方标记`，内容为 `HARNESS-CALLER-MARKER-<runId>`，同时写进 manifest 的 `marker`。
+每次运行在沙箱副本的 `SKILL.md` 末尾追加一段 `## 调用方标记`，内容为 `HARNESS-CALLER-MARKER-<runId>`，同时写进 manifest 的 `callerMarker`。
 
 它是"agent 读的确实是沙箱副本"的可核对凭据：在 `trace.ndjson` 里搜到该标记、而全局软链接那份里没有，就排除了"测的是主仓库旧版本"。
 

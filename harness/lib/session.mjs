@@ -49,7 +49,19 @@ export function sanitizeEnv(parentEnv) {
   return env;
 }
 
-export const TOOL_FACE = ['Skill', 'PowerShell', 'Read', 'Glob', 'Grep', 'Write'];
+export const AGENT_NAME = 'dida-scenario';
+
+const SESSION_TIMEOUT_MS = 15 * 60 * 1000;
+
+// 工具面只有 agents.json 一处定义，--allowedTools 从它派生，避免两份字面量各自漂移
+export function toolFaceOf(agentsPath) {
+  const agents = JSON.parse(fs.readFileSync(agentsPath, 'utf8'));
+  const agent = agents[AGENT_NAME];
+  if (!agent?.tools?.length) {
+    throw new Error(`${agentsPath} 里没有 ${AGENT_NAME} 的 tools`);
+  }
+  return agent.tools;
+}
 
 export function buildSessionArgv({ prompt, agentsPath }) {
   return [
@@ -58,9 +70,9 @@ export function buildSessionArgv({ prompt, agentsPath }) {
     '--agents',
     agentsPath,
     '--agent',
-    'dida-scenario',
+    AGENT_NAME,
     '--allowedTools',
-    TOOL_FACE.join(','),
+    toolFaceOf(agentsPath).join(','),
     '--permission-mode',
     'dontAsk',
     '--output-format',
@@ -70,9 +82,9 @@ export function buildSessionArgv({ prompt, agentsPath }) {
   ];
 }
 
-export function runSession({ argv, cwd, env, tracePath, timeoutMs = 15 * 60 * 1000 }) {
+export function runSession({ argv, cwd, env, transcriptPath }) {
   return new Promise((resolve, reject) => {
-    const out = fs.createWriteStream(tracePath, { flags: 'w' });
+    const out = fs.createWriteStream(transcriptPath, { flags: 'w' });
     const errChunks = [];
     const child = spawn(resolveClaudeExe(), argv, {
       cwd,
@@ -85,7 +97,7 @@ export function runSession({ argv, cwd, env, tracePath, timeoutMs = 15 * 60 * 10
     const timer = setTimeout(() => {
       timedOut = true;
       child.kill();
-    }, timeoutMs);
+    }, SESSION_TIMEOUT_MS);
 
     child.stdout.on('data', (chunk) => out.write(chunk));
     child.stderr.on('data', (chunk) => errChunks.push(chunk));
@@ -108,8 +120,8 @@ export function runSession({ argv, cwd, env, tracePath, timeoutMs = 15 * 60 * 10
   });
 }
 
-export function parseTrace(tracePath) {
-  const text = fs.readFileSync(tracePath, 'utf8');
+export function parseTranscript(transcriptPath) {
+  const text = fs.readFileSync(transcriptPath, 'utf8');
   const events = [];
   for (const line of text.split(/\r?\n/)) {
     if (!line.trim()) continue;
@@ -122,7 +134,7 @@ export function parseTrace(tracePath) {
   return events;
 }
 
-export function summarizeTrace(events) {
+export function summarizeTranscript(events) {
   const init = events.find((event) => event.type === 'system' && event.subtype === 'init');
   const result = events.find((event) => event.type === 'result');
   const toolCalls = [];
@@ -134,11 +146,9 @@ export function summarizeTrace(events) {
   }
   return {
     sessionId: init?.session_id ?? null,
-    cwd: init?.cwd ?? null,
     tools: init?.tools ?? [],
     modelAlias: init?.model ?? null,
     toolCalls,
-    resultText: result?.result ?? null,
     costUsd: result?.total_cost_usd ?? null,
     turns: result?.num_turns ?? null,
   };

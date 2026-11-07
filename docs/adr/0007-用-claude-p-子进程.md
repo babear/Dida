@@ -1,6 +1,6 @@
 # ADR-0007：用 `claude -p` 子进程而非 Agent SDK 或 plugin eval
 
-- 状态：接受
+- 状态：接受（2026-11-07 修订：后果段环境变量写法由 `CLAUDE_*` 改为 `CLAUDE*`，以覆盖无下划线的 `CLAUDECODE`）
 - 日期：2026-11-06
 
 ## 背景

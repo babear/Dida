@@ -15,13 +15,12 @@ export function gitState(repoRoot) {
   }
 }
 
-export function modelInfo(env) {
+// ANTHROPIC_DEFAULT_* 的四条映射全部记下；sessionAlias 决定哪一条是本次实际生效的
+export function modelInfo(env, sessionAlias) {
   const pick = (key) => env[key] ?? null;
   const aliases = ['SONNET', 'OPUS', 'HAIKU', 'FABLE'];
   return {
-    requested_alias: null,
-    resolved_model: pick('ANTHROPIC_DEFAULT_SONNET_MODEL'),
-    resolved_model_name: pick('ANTHROPIC_DEFAULT_SONNET_MODEL_NAME'),
+    requested_alias: sessionAlias,
     provider: pick('ANTHROPIC_BASE_URL'),
     alias_mapping: Object.fromEntries(
       aliases.map((alias) => [
