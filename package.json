@@ -3,6 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node harness/run.mjs"
+    "test": "node harness/run.mjs",
+    "test:unit": "node --test \"test/*.test.mjs\""
   }
 }

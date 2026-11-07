@@ -6,8 +6,11 @@
 
 ```bash
 node harness/run.mjs --scenario <id>
-npm test
+npm test              # 全量 scenario
+npm run test:unit     # lib 层单元测试，不烧 API
 ```
+
+`npm test` 是 scenario 全量跑（每条一次真实会话），`npm run test:unit` 只跑 `test/` 下的纯函数单元测试，两者互不替代。
 
 | 参数 | 默认 | 作用 |
 |---|---|---|
@@ -15,10 +18,22 @@ npm test
 | `--skill-path <dir>` | `skills/dida-cli` | 要复制进沙箱的 skill 目录 |
 | `--settings <file>` | `~/.claude/settings.json` | 取 `ANTHROPIC_*` 键的来源 |
 | `--keep-sandbox` | 关 | 成功时也保留沙箱（失败时总是保留） |
+| `--hold` | 关 | 跑完不清场，留现场给人看；之后用 `--clean <runId>` 收尾 |
+| `--clean <runId>` | — | 只按该 run 的 `created.json` 删除任务，然后退出 |
 
-退出码：任一会话非零退出或超时即 1。
+退出码：任一会话非零退出或超时即 1；清场中止或删除失败也是 1。
 
 **当前判定口径**：只看会话是否正常退出（`COMPLETED` / `INCOMPLETE`）。结局断言与过程断言分别属于 #7 与 #8，接上之后才构成 scenario 的通过或失败。
+
+### 清场纪律
+
+三条硬规则（见 ADR-0006）：
+
+1. **开跑前检查测试清单必须为空**。不空就拒绝运行，把可疑任务逐条列出来，不删。
+2. **只删 `created.json` 里记录的 id**。shim 每建成一条任务就追加一行，清场只按这份账本删。
+3. **清单里出现未记账的任务就整单放弃**。停下、报出它、什么都不删。
+
+失败现场默认保留（沙箱与 `runs/<runId>/` 都在）。确认完用 `--clean <runId>` 收尾。
 
 ### 环境变量
 
@@ -69,17 +84,38 @@ run-<runId>/
 
 ## shim
 
-单份 `bin/dida.cmd`，内容是 `CALL "<真 dida.cmd>" %*` 后透传退出码。必须写**绝对路径**：写 `CALL dida.cmd` 会按 `PATH` 解析回自己，批处理递归 339 层后崩掉。解析不到真 CLI 时直接报错，不降级成自递归。
+沙箱 `bin/` 下有三个文件：
 
-**与 ADR-0004 的偏离**：当前只做透传，没有记账到调用日志，也没有拒绝越界写入。这两项属于 #6，实现后 shim 规则才与 ADR-0004 完全一致。
+- `dida.cmd`：一行 shell 壳，`node dida-shim.mjs <node 可执行> <真 CLI 脚本> %*`。
+- `dida-shim.mjs`：记账 + 转发。
+- `lib/`：shim 只依赖的三个模块（`calllog.mjs`、`created.mjs`、`shim.mjs`）。
+
+**为什么不是 `CALL "<真 dida.cmd>" %*`**：实测 `.cmd` 的 `%*` 转发在含换行的参数上会截断到第一行，`%VAR%` 也会被展开。改成从真 `.cmd` 里解析出 node 与脚本入口后直接 spawn，argv 由 `CreateProcess` 原样传递，空格、引号、中文、`|`、`&`、`%` 都保真。解析不到入口时直接报错，不降级成自递归。
+
+**记账**：每次调用在转发**之前**追加一行到 `runs/<runId>/calls.ndjson`，内容为 `{argv, kind, at}`，`argv` 是数组而非命令字符串。`task create` 成功后从 stdout 抠出任务 id（`ID: <24 位十六进制>` 或 `--json` 的对象），追加到 `runs/<runId>/created.json`。
+
+**与 ADR-0004 的偏离**：目标清单校验与越界写入拒绝属于 #6，尚未实现。记账只做事实记录，不做拦截。
+
+**已知边界**：参数在 `dida.cmd` 这一层已经由 cmd 解析过一遍，多行 `--content` 会在这里被截成第一行。修法要绕开 `.cmd` 形态本身，另开 issue 追踪。
 
 ## 产物
 
-`runs/<runId>/` 下的 `trace.ndjson`（原始轨迹）与 `manifest.json`：沙箱绝对路径、skill 指纹与文件数、git rev 与 dirty、三层模型信息、工具面、轮数、成本、标记。`runs/` 已在 `.gitignore` 里。
+`runs/<runId>/` 下：
 
-成功时删除沙箱，失败或 `--keep-sandbox` 时保留，`manifest.sandboxRetained` 记录实际结果。
+| 文件 | 内容 |
+|---|---|
+| `trace.ndjson` | 被测会话的原始轨迹 |
+| `calls.ndjson` | shim 记下的调用序列，每行 `{argv, kind, at}` |
+| `created.json` | 本 run 建成并立刻记账的任务，清场只认这一份 |
+| `manifest.json` | 沙箱绝对路径、skill 指纹与文件数、git rev 与 dirty、三层模型信息、工具面、轮数、成本、调用数、创建数、清场结果、标记 |
+| `report.md` | 给人读的报告：首行是 skill 指纹 / 模型 / 沙箱路径，中间是本次创建的任务 id 表，末尾是摘要 |
+
+`runs/` 已在 `.gitignore` 里。
+
+成功时删除沙箱，失败、`--keep-sandbox` 或 `--hold` 时保留，`manifest.sandboxRetained` 记录实际结果。
 
 ## 已知边界
 
 - 沙箱只隔离工作目录，不隔离文件系统：agent 仍可用绝对路径读沙箱外的文件。见 #3。
 - 轮数看门狗与预算护栏未实现，见 #11。
+- 多行 `--content` 在 `dida.cmd` 的 `%*` 层会被截成第一行（见上文 shim 段）。
