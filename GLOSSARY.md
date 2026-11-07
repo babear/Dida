@@ -44,6 +44,10 @@ _Avoid_: 版本、变体、入口
 `PATH` 前置目录里的同名 `dida` 可执行文件（形态为 `.cmd`），由工具面上的 `PowerShell` 调用，透明转发给真 CLI，同时记账并拒绝越界写入。
 _Avoid_: mock、桩、代理、wrapper
 
+**调用方标记**:
+每次运行追加到沙箱 skill 副本 `SKILL.md` 末尾的 `HARNESS-CALLER-MARKER-<runId>`，同时写入 manifest，用来证明被测 agent 读到的是沙箱副本而非全局软链接。
+_Avoid_: 水印、witness
+
 **测试清单**:
 `Test_1`（`69abc459ebbdbd00000009f0`）与 `Test_2`（`59f736cae4b060e424059e3b`）。所有写入必须落在其中之一。
 _Avoid_: 沙箱清单、测试项目
