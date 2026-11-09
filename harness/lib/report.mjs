@@ -3,18 +3,10 @@ function short(value) {
   return value ? value.slice(0, 12) : 'unknown';
 }
 
+// 首行只写 CLI 自报的别名。ADR-0008：四条别名可能同指一个中转站模型，
+// 把其中一条写成「实际模型」是误导；真实映射见报告正文的「模型」小节。
 function modelLine(model) {
-  const requested = model?.requested_alias ?? null;
-  const mapping = model?.alias_mapping ?? {};
-  // 两种形态都要认：CLI 有时自报别名（sonnet），有时自报已解析的完整模型名。
-  const byAlias = requested ? mapping[requested] : null;
-  const byModel = requested
-    ? Object.values(mapping).find((entry) => entry.model?.toLowerCase() === requested.toLowerCase())
-    : null;
-  const resolved = byAlias ?? byModel;
-  const name = resolved?.name ?? resolved?.model ?? null;
-  if (requested && name && name !== requested) return `${requested} → ${name}`;
-  return requested ?? 'unknown';
+  return model?.requested_alias ?? 'unknown';
 }
 
 export function renderHeader(manifest) {

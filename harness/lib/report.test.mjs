@@ -32,7 +32,7 @@ test('报告首行同时给出 skill 指纹、模型与沙箱绝对路径', () =
   const report = renderReport(MANIFEST);
   const firstLine = report.split('\n')[0];
   assert.match(firstLine, /a1b2c3d4e5f6/);
-  assert.match(firstLine, /deepseek-v4\.1-flash/);
+  assert.match(firstLine, /sonnet/);
   assert.match(firstLine, /C:\\Users\\Charles\\AppData\\Local\\Temp\\run-/);
 });
 
@@ -49,7 +49,7 @@ test('报告列出本次会话在测试清单里创建的全部任务 id', () =>
   assert.match(report, /周末露营/);
 });
 
-test('CLI 自报的是完整模型名时，反查出别名映射里的真实模型', () => {
+test('首行只写 CLI 自报的模型，不替它挑一个「实际模型」', () => {
   const manifest = {
     ...MANIFEST,
     model: {
@@ -61,8 +61,8 @@ test('CLI 自报的是完整模型名时，反查出别名映射里的真实模�
     },
   };
   const header = renderHeader(manifest);
-  assert.match(header, /deepseek-v4\.1-flash/);
-  assert.doesNotMatch(header, /unknown/);
+  assert.match(header, /ccs-claude-p23e2e3--deepseek-v4\.1-flash\[1m\]/);
+  assert.doesNotMatch(header, /→/);
 });
 
 test('报告里不出现别人的任务——清场只管自己的账本', () => {

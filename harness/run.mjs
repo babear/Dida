@@ -72,11 +72,11 @@ function emptyCleanup(overrides = {}) {
 }
 
 // 清场出问题只影响这一条 run 的退出码，不阻断后续 scenario：账本按 runId 隔离。
-function hasCleanupProblem(cleanup) {
+// mismatched 不算问题：任务已按实况删掉，账本记的清单不同只是记录出入（ADR-0010）。
+export function hasCleanupProblem(cleanup) {
   return Boolean(cleanup.error)
     || cleanup.failed.length > 0
-    || cleanup.remaining.length > 0
-    || cleanup.mismatched.length > 0;
+    || cleanup.remaining.length > 0;
 }
 
 function reportCleanup(cleanup, run) {
@@ -268,7 +268,10 @@ async function main() {
   if (failures > 0) process.exitCode = 1;
 }
 
-main().catch((error) => {
-  console.error(error.stack ?? String(error));
-  process.exitCode = 1;
-});
+// 作为模块被测试 import 时不要执行 main；只有直接运行时才进 CLI。
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch((error) => {
+    console.error(error.stack ?? String(error));
+    process.exitCode = 1;
+  });
+}
