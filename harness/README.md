@@ -6,11 +6,10 @@
 
 ```bash
 node harness/run.mjs --scenario <id>
-npm test              # 全量 scenario
 npm run test:harness  # harness 自己的单元测试，不烧 API
 ```
 
-`npm test` 是 scenario 全量跑（每条一次真实会话），`npm run test:harness` 跑 harness 自己的单元测试（与被测文件同目录的 `*.test.mjs`），两者互不替代。
+`npm run test:harness` 跑与被测文件同目录的 `*.test.mjs`。跑 scenario 要真实 API 会话，没有 `npm test` 别名——等 #7 加回 `s1-plan-to-task` 再恢复。
 
 | 参数 | 默认 | 作用 |
 |---|---|---|
