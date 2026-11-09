@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { parseCallLog, writeCallLogEntry } from '../harness/lib/calllog.mjs';
+import { parseCallLog, writeCallLogEntry } from './calllog.mjs';
 
 test('调用日志每行是解析后的 argv 数组，不是命令字符串', () => {
   const entries = parseCallLog([

@@ -3,7 +3,6 @@ import { spawnSync } from 'node:child_process';
 
 import { appendCall } from './lib/calllog.mjs';
 import { recordCreated } from './lib/created.mjs';
-import { classify } from './lib/shim.mjs';
 
 // 形参由 sandbox 生成 bin/dida.cmd 时注入：<node 可执行> <真 CLI 脚本> <用户传入的 argv...>
 const [program, script, ...argv] = process.argv.slice(2);
@@ -20,10 +19,9 @@ if (!callLogPath || !createdFile) {
   process.exit(1);
 }
 
-const kind = classify(argv);
-
 // 记账在转发之前：真 CLI 崩掉也要留下"这次调用发生过"的事实。
-appendCall(callLogPath, { argv, kind, at: new Date().toISOString() });
+// 只记 argv，不在这里判定读写——那个判定留给真正需要它的消费者（越界写入防护，见 #6）。
+appendCall(callLogPath, { argv, at: new Date().toISOString() });
 
 // 直接 spawn node + 脚本，不经 cmd 二次解析：argv 含换行、引号、%VAR% 都能原样到达被测 CLI。
 const result = spawnSync(program, [script, ...argv], {

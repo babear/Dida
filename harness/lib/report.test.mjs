@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { renderHeader, renderReport, renderSummary } from '../harness/lib/report.mjs';
+import { renderHeader, renderReport, renderSummary } from './report.mjs';
 
 const MANIFEST = {
   run: '2026-11-07T09-00-00-000Z-ab12cd',
@@ -25,7 +25,7 @@ const MANIFEST = {
     { id: 'aaaa00000000000000000001', projectId: '69abc459ebbdbd00000009f0', title: '周末露营' },
   ],
   calls: { path: 'runs/x/calls.ndjson', total: 12 },
-  cleanup: { deleted: ['aaaa00000000000000000001'], failed: [], foreign: [] },
+  cleanup: { deleted: ['aaaa00000000000000000001'], failed: [], remaining: [], mismatched: [] },
 };
 
 test('报告首行同时给出 skill 指纹、模型与沙箱绝对路径', () => {
@@ -65,17 +65,37 @@ test('CLI 自报的是完整模型名时，反查出别名映射里的真实模�
   assert.doesNotMatch(header, /unknown/);
 });
 
-test('报告区分清场删掉的任务与清单里未记账的任务', () => {
+test('报告里不出现别人的任务——清场只管自己的账本', () => {
+  const report = renderReport({
+    ...MANIFEST,
+    cleanup: { deleted: [], failed: [], remaining: [], mismatched: [] },
+  });
+  assert.doesNotMatch(report, /别人建的/);
+  assert.doesNotMatch(report, /未记账/);
+  assert.doesNotMatch(report, /清场已停止/);
+});
+
+test('账本与实况的清单不一致时，报告写清楚出入', () => {
   const report = renderReport({
     ...MANIFEST,
     cleanup: {
-      deleted: [],
+      deleted: ['aaaa00000000000000000001'],
       failed: [],
-      foreign: [{ projectId: '69abc459ebbdbd00000009f0', id: 'bbbb00000000000000000002', title: '别人建的' }],
+      remaining: [],
+      mismatched: [{ id: 'aaaa00000000000000000001', recordedAt: 'p1', actual: 'p2' }],
     },
   });
-  assert.match(report, /bbbb00000000000000000002/);
-  assert.match(report, /未记账/);
+  assert.match(report, /账本记在 p1/);
+  assert.match(report, /实际在 p2/);
+});
+
+test('删完仍在清单里时，报告点名是哪些 id', () => {
+  const report = renderReport({
+    ...MANIFEST,
+    cleanup: { deleted: [], failed: [], remaining: ['aaaa00000000000000000001'], mismatched: [] },
+  });
+  assert.match(report, /删除后仍在清单里/);
+  assert.match(report, /aaaa00000000000000000001/);
 });
 
 test('git 处于 dirty 状态时报告里标出来', () => {
@@ -86,9 +106,9 @@ test('git 处于 dirty 状态时报告里标出来', () => {
 test('清场读账本出错时，报告写明原因而不是显示成删除 0 条', () => {
   const report = renderReport({
     ...MANIFEST,
-    cleanup: { deleted: [], failed: [], foreign: [], error: 'created.json 不是合法 JSON' },
+    cleanup: { deleted: [], failed: [], remaining: [], mismatched: [], error: '账本不是合法 JSON' },
   });
-  assert.match(report, /created\.json 不是合法 JSON/);
+  assert.match(report, /账本不是合法 JSON/);
 });
 
 test('报告写出三层模型信息：CLI 自报、真实映射、代理地址', () => {

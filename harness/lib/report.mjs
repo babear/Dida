@@ -39,7 +39,7 @@ function cost(costUsd) {
 
 export function renderReport(manifest) {
   const created = manifest.created ?? [];
-  const cleanup = manifest.cleanup ?? { deleted: [], failed: [], foreign: [] };
+  const cleanup = manifest.cleanup ?? { deleted: [], failed: [], remaining: [], mismatched: [] };
   // 首行就是三个事实，人打开报告第一眼就能回答"测的是哪份 skill、哪个模型、沙箱在哪"。
   const lines = [
     renderHeader(manifest),
@@ -53,18 +53,23 @@ export function renderReport(manifest) {
     '',
   ];
 
-  if (cleanup.foreign?.length) {
-    lines.push(
-      '**清场已停止**：清单里有非本 run 创建的任务，未记账因此不动手。',
-      '',
-      taskTable(cleanup.foreign),
-    );
-  } else if (cleanup.error) {
+  if (cleanup.error) {
     lines.push(`**清场未执行**：${cleanup.error}`);
   } else if (cleanup.deferred) {
     lines.push(`未清场：会话未正常结束，现场保留。确认后用 \`--clean ${manifest.run}\` 收尾。`);
   } else {
-    lines.push(`按 created.json 删除 ${cleanup.deleted?.length ?? 0} 条，失败 ${cleanup.failed?.length ?? 0} 条。`);
+    lines.push(`按账本删除 ${cleanup.deleted?.length ?? 0} 条，失败 ${cleanup.failed?.length ?? 0} 条。`);
+    if (cleanup.remaining?.length) {
+      lines.push('', `**删除后仍在清单里**：${cleanup.remaining.join('、')}`);
+    }
+    if (cleanup.mismatched?.length) {
+      lines.push(
+        '',
+        '**账本与实况的清单不一致**（已按实际清单删除）：',
+        '',
+        ...cleanup.mismatched.map((e) => `- \`${e.id}\`：账本记在 ${e.recordedAt}，实际在 ${e.actual}`),
+      );
+    }
   }
 
   lines.push('', '## 会话', '');
@@ -96,7 +101,7 @@ export function renderReport(manifest) {
 
 export function renderSummary(manifest) {
   const created = manifest.created ?? [];
-  const cleanup = manifest.cleanup ?? { deleted: [], failed: [], foreign: [] };
+  const cleanup = manifest.cleanup ?? { deleted: [], failed: [], remaining: [], mismatched: [] };
   const skill = short(manifest.skill?.sha256);
   const parts = [
     `scenario ${manifest.scenario} 用 skill ${skill} 跑了一次真实会话，`,
@@ -105,12 +110,13 @@ export function renderSummary(manifest) {
       ? '没有在测试清单里建任务。'
       : `在测试清单里建了 ${created.length} 条任务（${created.map((e) => e.id).join('、')}）。`,
   ];
-  if (cleanup.foreign?.length) {
-    parts.push(`清场停止：清单里有 ${cleanup.foreign.length} 条非本 run 创建的任务，未删除。`);
-  } else if (cleanup.deferred) {
+  if (cleanup.deferred) {
     parts.push('会话未正常结束，任务与沙箱一并保留，需显式清场。');
+  } else if (cleanup.error) {
+    parts.push(`清场未执行：${cleanup.error}`);
   } else {
     parts.push(`清场删掉 ${cleanup.deleted?.length ?? 0} 条。`);
+    if (cleanup.remaining?.length) parts.push(`有 ${cleanup.remaining.length} 条删完仍在清单里。`);
   }
   return parts.join('');
 }

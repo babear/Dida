@@ -11,7 +11,7 @@ import { defaultSettingsPath, ensureRunsDir, gitState, modelInfo, runId } from '
 import { listScenarios, loadScenario } from './lib/scenario.mjs';
 import { crossCheck, parseCallLog } from './lib/calllog.mjs';
 import { readCreated } from './lib/created.mjs';
-import { cleanRun, inspectProjects, snapshotProjects } from './lib/cleanup.mjs';
+import { cleanRun } from './lib/cleanup.mjs';
 import { resolveTestProjects } from './lib/projects.mjs';
 import { renderReport } from './lib/report.mjs';
 
@@ -67,11 +67,32 @@ function realDida() {
   };
 }
 
-function projectsSnapshot(dida, projects) {
-  try {
-    return snapshotProjects(dida, projects);
-  } catch (error) {
-    throw new Error(`读测试清单失败：${error.message}`);
+function emptyCleanup(overrides = {}) {
+  return { deleted: [], failed: [], remaining: [], mismatched: [], ...overrides };
+}
+
+// 清场出问题只影响这一条 run 的退出码，不阻断后续 scenario：账本按 runId 隔离。
+function hasCleanupProblem(cleanup) {
+  return Boolean(cleanup.error)
+    || cleanup.failed.length > 0
+    || cleanup.remaining.length > 0
+    || cleanup.mismatched.length > 0;
+}
+
+function reportCleanup(cleanup, run) {
+  if (cleanup.deferred) {
+    console.log(`  cleanup 未清场${run ? `（用 --clean ${run} 收尾）` : ''}`);
+    return;
+  }
+  if (cleanup.error) {
+    console.log(`  cleanup 未执行：${cleanup.error}`);
+    return;
+  }
+  console.log(`  cleanup deleted=${cleanup.deleted.length} failed=${cleanup.failed.length} remaining=${cleanup.remaining.length}`);
+  for (const entry of cleanup.failed) console.error(`    删除失败 ${entry.projectId} ${entry.id}: ${entry.stderr}`);
+  for (const id of cleanup.remaining) console.error(`    删除后仍在清单里 ${id}`);
+  for (const entry of cleanup.mismatched) {
+    console.error(`    账本记在 ${entry.recordedAt}、实际在 ${entry.actual}：${entry.id}（按实际清单删）`);
   }
 }
 
@@ -92,7 +113,7 @@ async function runOne(options, id, projects) {
 
   const transcriptPath = path.join(runDir, 'trace.ndjson');
   const callLogPath = path.join(runDir, 'calls.ndjson');
-  const createdFile = path.join(runDir, 'created.json');
+  const createdFile = path.join(runDir, 'created.ndjson');
   const argv = buildSessionArgv({
     prompt: scenario.prompt,
     agentsPath: sandbox.agentsPath,
@@ -166,13 +187,13 @@ async function main() {
   --settings <file>   取 ANTHROPIC_* 键的来源（默认 ~/.claude/settings.json）
   --keep-sandbox      成功时也保留沙箱
   --hold              跑完不清场，留现场
-  --clean <runId>     只按该 run 的 created.json 删除任务，然后退出`);
+  --clean <runId>     只按该 run 的 created.ndjson 删除任务，然后退出`);
     return;
   }
   const projects = resolveTestProjects();
   const dida = realDida();
 
-  // 清场子命令：只按 created.json 删，遇到未记账任务就停下。
+  // 清场子命令：只按账本删。
   if (options.clean) {
     const runDir = path.join(ensureRunsDir(repoRoot), options.clean);
     if (!fs.existsSync(runDir)) {
@@ -185,38 +206,19 @@ async function main() {
     const cleanup = cleanRun({
       dida: realDida(),
       projects: manifest.testProjects ?? projects,
-      createdFile: path.join(runDir, 'created.json'),
+      createdFile: path.join(runDir, 'created.ndjson'),
     });
     const updated = { ...manifest, cleanup };
     writeManifest(runDir, updated);
     writeReport(runDir, updated);
-    if (cleanup.aborted) {
-      console.error(`清场停止：清单里有 ${cleanup.foreign.length} 条非本 run 创建的任务，未删除。`);
-      for (const entry of cleanup.foreign) console.error(`  ${entry.projectId} ${entry.id} ${entry.title ?? ''}`);
-      process.exitCode = 1;
-      return;
-    }
-    console.log(`已删除 ${cleanup.deleted.length} 条，失败 ${cleanup.failed.length} 条`);
-    for (const entry of cleanup.failed) console.error(`  删除失败 ${entry.projectId} ${entry.id}: ${entry.stderr}`);
-    if (cleanup.failed.length > 0) process.exitCode = 1;
+    reportCleanup(cleanup);
+    if (hasCleanupProblem(cleanup)) process.exitCode = 1;
     return;
   }
 
   const ids = options.scenario ? [options.scenario] : listScenarios(repoRoot);
   if (ids.length === 0) {
     console.error('no scenarios found');
-    process.exitCode = 1;
-    return;
-  }
-
-  // 运行前检查：清单不空就拒绝开跑并列出可疑任务。绝不自动清空。
-  const preliminary = inspectProjects(projects, projectsSnapshot(dida, projects));
-  if (!preliminary.ok) {
-    console.error('测试清单不为空，拒绝开跑：');
-    for (const entry of preliminary.foreign) {
-      console.error(`  ${entry.projectId} ${entry.id} ${entry.title ?? '（无标题）'}`);
-    }
-    console.error('确认这些任务的去留后，用 --clean <runId> 只清理本 harness 建过的，或手动处置。');
     process.exitCode = 1;
     return;
   }
@@ -231,26 +233,24 @@ async function main() {
     // 先把会话事实落盘，再动清单：清场读账本出错时，manifest 与 report 必须已经在了。
     writeManifest(runDir, { ...manifest, cleanup: null, sandboxRetained: retained });
 
-    // 只按 created.json 删。会话失败时连任务一起保留现场（ADR-0006），由 --clean 显式收尾。
+    // 只按账本删。会话没正常结束时连任务一起保留现场，由 --clean 显式收尾。
     let cleanup;
     try {
       cleanup = options.hold || !sessionCompleted
-        ? { aborted: false, deleted: [], failed: [], foreign: [], deferred: true }
+        ? emptyCleanup({ deferred: true })
         : cleanRun({ dida: realDida(), projects, createdFile });
     } catch (error) {
-      cleanup = { aborted: false, deleted: [], failed: [], foreign: [], error: error.message };
+      cleanup = emptyCleanup({ error: error.message });
     }
     const finalManifest = { ...manifest, cleanup, sandboxRetained: retained };
     writeManifest(runDir, finalManifest);
     writeReport(runDir, finalManifest);
     if (!retained) fs.rmSync(sandbox.root, { recursive: true, force: true });
-    if (!sessionCompleted || cleanup.aborted || cleanup.error || cleanup.failed.length > 0) failures += 1;
 
-    // 清场没收拾干净时，后面的 scenario 会在一条脏清单上开跑，结论不可归因——直接停。
-    if (cleanup.aborted || cleanup.error || cleanup.failed.length > 0) {
-      console.error(`清场未完成，停止后续 scenario；用 --clean ${run} 收尾后再跑。`);
-      break;
-    }
+    // 清场失败只记 log 不中断：每条 scenario 的账本按 runId 隔离，删不掉自己的那几条
+    // 不会影响下一条的判断。退出码仍非零，让人知道有现场要收。
+    const cleanupProblem = hasCleanupProblem(cleanup);
+    if (!sessionCompleted || cleanupProblem) failures += 1;
 
     console.log(`${sessionCompleted ? 'COMPLETED' : 'INCOMPLETE'} ${id}  run=${run}`);
     console.log(`  skill sha256=${manifest.skill.sha256.slice(0, 16)} files=${manifest.skill.files} git=${manifest.skill.git.rev?.slice(0, 12)}${manifest.skill.git.dirty ? ' (dirty)' : ''}`);
@@ -259,7 +259,7 @@ async function main() {
     console.log(`  transcript=${path.relative(repoRoot, manifest.transcript.path)} events=${manifest.transcript.events} toolCalls=${manifest.transcript.toolCalls}`);
     console.log(`  calls=${path.relative(repoRoot, manifest.calls.path)} total=${manifest.calls.total}`);
     console.log(`  created=${manifest.created.length} 条${manifest.created.length ? '：' + manifest.created.map((e) => e.id).join('、') : ''}`);
-    console.log(`  cleanup deleted=${cleanup.deleted.length} failed=${cleanup.failed.length}${cleanup.aborted ? ` 已停止（${cleanup.foreign.length} 条未记账）` : ''}${cleanup.deferred ? ` 未清场（用 --clean ${run} 收尾）` : ''}`);
+    reportCleanup(cleanup, run);
     console.log(`  caller marker=${manifest.callerMarker}`);
     console.log(`  run dir=${path.relative(repoRoot, runDir)}`);
     if (!sessionCompleted) console.log(`  session exit=${session.exitCode} timedOut=${session.timedOut}`);

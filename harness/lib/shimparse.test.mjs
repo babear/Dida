@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 
-import { parseCmdShim, renderCmdShim } from '../harness/lib/shim.mjs';
+import { parseCmdShim, renderCmdShim } from './shim.mjs';
 
 const REAL_CMD = [
   '@ECHO off',

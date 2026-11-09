@@ -7,10 +7,10 @@
 ```bash
 node harness/run.mjs --scenario <id>
 npm test              # 全量 scenario
-npm run test:unit     # lib 层单元测试，不烧 API
+npm run test:harness  # harness 自己的单元测试，不烧 API
 ```
 
-`npm test` 是 scenario 全量跑（每条一次真实会话），`npm run test:unit` 只跑 `test/` 下的纯函数单元测试，两者互不替代。
+`npm test` 是 scenario 全量跑（每条一次真实会话），`npm run test:harness` 跑 harness 自己的单元测试（与被测文件同目录的 `*.test.mjs`），两者互不替代。
 
 | 参数 | 默认 | 作用 |
 |---|---|---|
@@ -19,7 +19,7 @@ npm run test:unit     # lib 层单元测试，不烧 API
 | `--settings <file>` | `~/.claude/settings.json` | 取 `ANTHROPIC_*` 键的来源 |
 | `--keep-sandbox` | 关 | 成功时也保留沙箱（失败时总是保留） |
 | `--hold` | 关 | 跑完不清场，留现场给人看；之后用 `--clean <runId>` 收尾 |
-| `--clean <runId>` | — | 只按该 run 的 `created.json` 删除任务，然后退出 |
+| `--clean <runId>` | — | 只按该 run 的 `created.ndjson` 删除任务，然后退出 |
 
 退出码：任一会话非零退出或超时即 1；清场中止或删除失败也是 1。
 
@@ -27,13 +27,14 @@ npm run test:unit     # lib 层单元测试，不烧 API
 
 ### 清场纪律
 
-三条硬规则（见 ADR-0006）：
+**一条 scenario 的全部事实源是 `created.ndjson`。** 断言读它，清场删它。清单里的其它任务不在这个视野里——不检测、不报告、不碰（见 ADR-0010）。
 
-1. **开跑前检查测试清单必须为空**。不空就拒绝运行，把可疑任务逐条列出来，不删。
-2. **只删 `created.json` 里记录的 id**。shim 每建成一条任务就追加一行，清场只按这份账本删。
-3. **清单里出现未记账的任务就整单放弃**。停下、报出它、什么都不删。
+1. **只删账本里记录的 id**。shim 每建成一条任务就追加一行（NDJSON，并发安全），清场只按这份账本删。
+2. **删除目标取实际枚举到的清单**，不用账本里记的 `projectId`；两者不一致时报 `mismatched`，仍按实况删。
+3. **清场失败不中断后续 scenario**。账本按 runId 隔离，删不掉自己的那几条不影响下一条。失败记 log，退出码非零。
+4. **清场后自查**：删完重读清单，账本里的 id 仍在就报 `remaining`。
 
-失败现场默认保留：沙箱、`runs/<runId>/` 与**本 run 建的任务**都不动（ADR-0006）。确认完用 `--clean <runId>` 收尾。会话正常结束后才自动清场；`--hold` 让正常结束的运行也保留。
+失败现场默认保留：沙箱、`runs/<runId>/` 与**本 run 建的任务**都不动。确认完用 `--clean <runId>` 收尾。会话正常结束后才自动清场；`--hold` 让正常结束的运行也保留。
 
 ### 环境变量
 
@@ -93,7 +94,7 @@ run-<runId>/
 
 **为什么不是 `CALL "<真 dida.cmd>" %*`**：实测 `.cmd` 的 `%*` 转发在含换行的参数上会截断到第一行，`%VAR%` 也会被展开。改成从真 `.cmd` 里解析出 node 与脚本入口后直接 spawn，argv 由 `CreateProcess` 原样传递，空格、引号、中文、`|`、`&`、`%` 都保真。解析不到入口时直接报错，不降级成自递归。
 
-**记账**：每次调用在转发**之前**追加一行到 `runs/<runId>/calls.ndjson`，内容为 `{argv, kind, at}`，`argv` 是数组而非命令字符串。`task create` 成功后从 stdout 抠出任务 id（`ID: <24 位十六进制>` 或 `--json` 的对象），追加到 `runs/<runId>/created.json`。
+**记账**：每次调用在转发**之前**追加一行到 `runs/<runId>/calls.ndjson`，内容为 `{argv, at}`，`argv` 是数组而非命令字符串。`task create` 成功后从 stdout 抠出任务 id（`ID: <24 位十六进制>` 或 `--json` 的对象），追加到 `runs/<runId>/created.ndjson`（一行一条）。
 
 **与 ADR-0004 的偏离**：目标清单校验与越界写入拒绝属于 #6，尚未实现。记账只做事实记录，不做拦截。
 
@@ -106,8 +107,8 @@ run-<runId>/
 | 文件 | 内容 |
 |---|---|
 | `trace.ndjson` | 被测会话的原始轨迹 |
-| `calls.ndjson` | shim 记下的调用序列，每行 `{argv, kind, at}` |
-| `created.json` | 本 run 建成并立刻记账的任务，清场只认这一份 |
+| `calls.ndjson` | shim 记下的调用序列，每行 `{argv, at}` |
+| `created.ndjson` | 本 run 建成并立刻记账的任务，一行一条；清场与断言都只认这一份 |
 | `manifest.json` | 沙箱绝对路径、skill 指纹与文件数、git rev 与 dirty、三层模型信息、工具面、轮数、成本、调用数、创建数、清场结果、标记 |
 | `report.md` | 给人读的报告：首行是 skill 指纹 / 模型 / 沙箱路径，中间是本次创建的任务 id 表，末尾是摘要 |
 

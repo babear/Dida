@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { crossCheck } from '../harness/lib/calllog.mjs';
+import { crossCheck } from './calllog.mjs';
 
 test('调用日志的调用数与轨迹里的命令调用数一致时，校验通过', () => {
   const calls = [

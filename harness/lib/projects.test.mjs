@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { resolveTestProjects, TEST_PROJECTS } from '../harness/lib/projects.mjs';
+import { resolveTestProjects, TEST_PROJECTS } from './projects.mjs';
 
 test('默认取 Test_1 与 Test_2 两个清单', () => {
   assert.deepEqual(resolveTestProjects({}), TEST_PROJECTS);
