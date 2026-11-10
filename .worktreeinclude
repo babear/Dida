@@ -1,0 +1,5 @@
+# 创建 worktree 时从主工作区复制过来的 gitignored 文件（使用 .gitignore 语法）
+# 只复制同时满足「匹配下面的模式」和「已被 git 忽略」的文件
+
+# codegraph 本地索引，避免每个 worktree 重新 init
+.codegraph/
