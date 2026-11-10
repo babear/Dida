@@ -9,7 +9,7 @@ import { parseCmdShim } from './lib/shim.mjs';
 import { buildSessionArgv, runSession, parseTranscript, sanitizeEnv, summarizeTranscript } from './lib/session.mjs';
 import { defaultSettingsPath, ensureRunsDir, gitState, modelInfo, runId } from './lib/provenance.mjs';
 import { listScenarios, loadScenario } from './lib/scenario.mjs';
-import { crossCheck, parseCallLog } from './lib/calllog.mjs';
+import { crossCheck, outOfBoundsCalls, parseCallLog, rejectedCalls } from './lib/calllog.mjs';
 import { readCreated } from './lib/created.mjs';
 import { cleanRun } from './lib/cleanup.mjs';
 import { resolveTestProjects } from './lib/projects.mjs';
@@ -121,9 +121,10 @@ async function runOne(options, id, projects) {
 
   const env = { ...sanitizeEnv(process.env), CLAUDE_CONFIG_DIR: sandbox.configDir };
   env.PATH = `${sandbox.binDir}${path.delimiter}${env.PATH ?? ''}`;
-  // shim 靠这两个环境变量记账；它们在沙箱会话里可见，但只指向本 run 的账本，不含断言内容。
+  // shim 靠这三个环境变量记账与判越界；它们只指向本 run 的账本与测试清单，不含断言内容。
   env.DIDA_CALL_LOG = callLogPath;
   env.DIDA_CREATED_FILE = createdFile;
+  env.DIDA_TEST_PROJECTS = projects.join(',');
   const session = await runSession({ argv, cwd: sandbox.root, env, transcriptPath });
 
   const events = parseTranscript(transcriptPath);
@@ -157,6 +158,8 @@ async function runOne(options, id, projects) {
       path: callLogPath,
       total: calls.length,
       unparseable: calls.filter((c) => c.unparseable).length,
+      rejected: rejectedCalls(calls).length,
+      outOfBounds: outOfBoundsCalls(calls).length,
       crossCheck: crossCheck(calls, summary.toolCalls),
     },
     created: readCreated(createdFile),
@@ -257,7 +260,7 @@ async function main() {
     console.log(`  model alias=${manifest.model.requested_alias} provider=${manifest.model.provider}（别名不等于实际执行模型，真实映射见 manifest.model.alias_mapping）`);
     console.log(`  sandbox=${sandbox.root}${retained ? ' (retained)' : ' (removed)'}`);
     console.log(`  transcript=${path.relative(repoRoot, manifest.transcript.path)} events=${manifest.transcript.events} toolCalls=${manifest.transcript.toolCalls}`);
-    console.log(`  calls=${path.relative(repoRoot, manifest.calls.path)} total=${manifest.calls.total}`);
+    console.log(`  calls=${path.relative(repoRoot, manifest.calls.path)} total=${manifest.calls.total} rejected=${manifest.calls.rejected} outOfBounds=${manifest.calls.outOfBounds}`);
     console.log(`  created=${manifest.created.length} 条${manifest.created.length ? '：' + manifest.created.map((e) => e.id).join('、') : ''}`);
     reportCleanup(cleanup, run);
     console.log(`  caller marker=${manifest.callerMarker}`);

@@ -68,6 +68,14 @@ export function renderReport(manifest) {
   lines.push(`- 退出码 ${manifest.session?.exitCode ?? 'unknown'}${manifest.session?.timedOut ? '（超时）' : ''}`);
   lines.push(`- ${manifest.session?.turns ?? '?'} 轮，$${cost(manifest.session?.costUsd)}`);
   lines.push(`- 调用日志 ${manifest.calls?.path ?? '-'}（${manifest.calls?.total ?? 0} 条）`);
+  if (manifest.calls?.rejected) {
+    const outOfBounds = manifest.calls.outOfBounds ?? 0;
+    const other = manifest.calls.rejected - outOfBounds;
+    const parts = [];
+    if (outOfBounds) parts.push(`越界写入 ${outOfBounds} 次`);
+    if (other) parts.push(`解析不出目标 ${other} 次`);
+    lines.push(`- 被拒绝的写命令 ${manifest.calls.rejected} 次（${parts.join('、')}；写请求没有发出去）`);
+  }
   const cross = manifest.calls?.crossCheck;
   if (cross) {
     lines.push(
@@ -109,6 +117,14 @@ export function renderSummary(manifest) {
   } else {
     parts.push(`清场删掉 ${cleanup.deleted?.length ?? 0} 条。`);
     if (cleanup.remaining?.length) parts.push(`有 ${cleanup.remaining.length} 条删完仍在清单里。`);
+  }
+  if (manifest.calls?.rejected) {
+    const outOfBounds = manifest.calls.outOfBounds ?? 0;
+    const other = manifest.calls.rejected - outOfBounds;
+    const detail = [outOfBounds && `${outOfBounds} 次越界写入`, other && `${other} 次解析不出目标`]
+      .filter(Boolean)
+      .join('、');
+    parts.push(`另有 ${manifest.calls.rejected} 次写命令被当场拒绝（${detail}）。`);
   }
   return parts.join('');
 }

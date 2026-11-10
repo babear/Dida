@@ -3,6 +3,8 @@ import { spawnSync } from 'node:child_process';
 
 import { appendCall } from './lib/calllog.mjs';
 import { recordCreated } from './lib/created.mjs';
+import { decide, rejectText, stripNodeAssertion } from './lib/guard.mjs';
+import { parseProjectList } from './lib/projects.mjs';
 
 // 形参由 sandbox 生成 bin/dida.cmd 时注入：<node 可执行> <真 CLI 脚本> <用户传入的 argv...>
 const [program, script, ...argv] = process.argv.slice(2);
@@ -19,23 +21,40 @@ if (!callLogPath || !createdFile) {
   process.exit(1);
 }
 
-// 记账在转发之前：真 CLI 崩掉也要留下"这次调用发生过"的事实。
-// 只记 argv，不在这里判定读写——那个判定留给真正需要它的消费者（越界写入防护，见 #6）。
-appendCall(callLogPath, { argv, at: new Date().toISOString() });
+// 测试清单集合缺失时集合为空：decide 会拒绝一切需要目标的写命令（没有可判定的边界就不放行），
+// 读命令照常转发。这里不带默认值——与清场的 resolveTestProjects 不同，shim 必须区分"没配"。
+// 拒绝的输出保持与真 CLI 同构，不暴露这是评测环境。
+const allowedProjects = parseProjectList(process.env.DIDA_TEST_PROJECTS);
+const verdict = decide(argv, allowedProjects);
 
-// 直接 spawn node + 脚本，不经 cmd 二次解析：argv 含换行、引号、%VAR% 都能原样到达被测 CLI。
-const result = spawnSync(program, [script, ...argv], {
-  encoding: 'utf8',
-  stdio: ['ignore', 'pipe', 'pipe'],
-  windowsHide: true,
+// 记账在转发之前：真 CLI 崩掉、或被拒没转发，都要留下"这次调用发生过"的事实。
+appendCall(callLogPath, {
+  argv,
+  at: new Date().toISOString(),
+  decision: verdict.allow ? 'allow' : 'rejected',
+  ...(verdict.allow ? {} : { reason: verdict.reason, targets: verdict.targets }),
 });
 
-const stdout = result.stdout ?? '';
-const stderr = result.stderr ?? '';
-process.stdout.write(stdout);
-process.stderr.write(stderr);
+if (!verdict.allow) {
+  // 用 exitCode + return 而不是 exit()：Windows 管道上立刻 exit 会把 stderr 截断。
+  process.stderr.write(`${rejectText({ id: verdict.targets[0] })}\n`);
+  process.exitCode = 1;
+} else {
+  // 直接 spawn node + 脚本，不经 cmd 二次解析：argv 含换行、引号、%VAR% 都能原样到达被测 CLI。
+  const result = spawnSync(program, [script, ...argv], {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    windowsHide: true,
+  });
 
-// recordCreated 自己只认 task create 且成功的调用；其它调用原样略过。
-recordCreated(createdFile, { argv, stdout, exitCode: result.status ?? 1, stderr });
+  const stdout = result.stdout ?? '';
+  // 真 CLI 在错误路径上退出时会带一行 libuv 断言；转发时吞掉，否则 agent 会看到进程内部信息。
+  const stderr = stripNodeAssertion(result.stderr ?? '');
+  process.stdout.write(stdout);
+  process.stderr.write(stderr);
 
-process.exit(result.status ?? 1);
+  // recordCreated 自己只认 task create 且成功的调用；其它调用原样略过。
+  recordCreated(createdFile, { argv, stdout, exitCode: result.status ?? 1, stderr });
+
+  process.exitCode = result.status ?? 1;
+}

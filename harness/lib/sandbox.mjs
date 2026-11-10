@@ -65,7 +65,7 @@ export function resolveRealDidaCmd(searchPath = process.env.PATH ?? '') {
 const SHIM_SCRIPT_SOURCE = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'dida-shim.mjs');
 const SHIM_LIB_SOURCE = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'lib');
 
-function writeShim(binDir, realDidaCmd, callLogPath, createdFile) {
+function writeShim(binDir, realDidaCmd) {
   if (!realDidaCmd) {
     throw new Error('dida.cmd not found on PATH; set DIDA_CMD to the real dida.cmd');
   }
@@ -78,10 +78,10 @@ function writeShim(binDir, realDidaCmd, callLogPath, createdFile) {
   fs.mkdirSync(binDir, { recursive: true });
   const shimJs = path.join(binDir, 'dida-shim.mjs');
   fs.copyFileSync(SHIM_SCRIPT_SOURCE, shimJs);
-  // shim 只依赖这三个模块；整目录复制会把 run.mjs 无关的东西也带进沙箱。
+  // shim 只依赖这几个模块；整目录复制会把 run.mjs 无关的东西也带进沙箱。
   const libDir = path.join(binDir, 'lib');
   fs.mkdirSync(libDir, { recursive: true });
-  for (const name of ['calllog.mjs', 'created.mjs', 'shim.mjs']) {
+  for (const name of ['calllog.mjs', 'created.mjs', 'guard.mjs', 'projects.mjs', 'shim.mjs']) {
     fs.copyFileSync(path.join(SHIM_LIB_SOURCE, name), path.join(libDir, name));
   }
   fs.writeFileSync(
