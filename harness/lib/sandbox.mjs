@@ -65,7 +65,18 @@ export function resolveRealDidaCmd(searchPath = process.env.PATH ?? '') {
 const SHIM_SCRIPT_SOURCE = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'dida-shim.mjs');
 const SHIM_LIB_SOURCE = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'lib');
 
-function writeShim(binDir, realDidaCmd, callLogPath, createdFile) {
+// guard-config.mjs 的源码。测试清单集合烘焙进沙箱配置、不走环境变量：
+// 被测 agent 能改进程环境，一旦白名单从 env 来，它就能把真实清单 id 塞进去让 shim 放行。
+export function renderGuardConfig(projects) {
+  if (!Array.isArray(projects)) {
+    // 缺测试清单集合就建不出可用的沙箱：宁可当场报错，也不要生成
+    // `TEST_PROJECTS = undefined` 让 shim 在缺配置的状态下跑起来。
+    throw new Error('createSandbox 需要 testProjects：没有测试清单集合就无法生成越界判定配置');
+  }
+  return `export const TEST_PROJECTS = ${JSON.stringify(projects)};\n`;
+}
+
+export function writeShim(binDir, realDidaCmd, allowedProjects) {
   if (!realDidaCmd) {
     throw new Error('dida.cmd not found on PATH; set DIDA_CMD to the real dida.cmd');
   }
@@ -78,12 +89,13 @@ function writeShim(binDir, realDidaCmd, callLogPath, createdFile) {
   fs.mkdirSync(binDir, { recursive: true });
   const shimJs = path.join(binDir, 'dida-shim.mjs');
   fs.copyFileSync(SHIM_SCRIPT_SOURCE, shimJs);
-  // shim 只依赖这三个模块；整目录复制会把 run.mjs 无关的东西也带进沙箱。
+  // shim 只依赖这几个模块；整目录复制会把 run.mjs 无关的东西也带进沙箱。
   const libDir = path.join(binDir, 'lib');
   fs.mkdirSync(libDir, { recursive: true });
-  for (const name of ['calllog.mjs', 'created.mjs', 'shim.mjs']) {
+  for (const name of ['calllog.mjs', 'created.mjs', 'guard.mjs']) {
     fs.copyFileSync(path.join(SHIM_LIB_SOURCE, name), path.join(libDir, name));
   }
+  fs.writeFileSync(path.join(libDir, 'guard-config.mjs'), renderGuardConfig(allowedProjects));
   fs.writeFileSync(
     path.join(binDir, 'dida.cmd'),
     renderCmdShim({ program: parsed.program, script: parsed.script, shimJs }),
@@ -91,7 +103,7 @@ function writeShim(binDir, realDidaCmd, callLogPath, createdFile) {
   return { program: parsed.program, script: parsed.script };
 }
 
-export function createSandbox({ runId, skillPath, agentsSourcePath, scenario, settingsPath }) {
+export function createSandbox({ runId, skillPath, agentsSourcePath, scenario, settingsPath, testProjects }) {
   const root = path.join(os.tmpdir(), `run-${runId}`);
   const configDir = path.join(root, '.claude');
   const binDir = path.join(root, 'bin');
@@ -116,7 +128,7 @@ export function createSandbox({ runId, skillPath, agentsSourcePath, scenario, se
   // 定义文件是唯一事实源，坏掉要在建沙箱时就报，而不是等 claude -p 起来后从 stderr 里猜
   toolFaceOf(agentsPath);
 
-  const shim = writeShim(binDir, resolveRealDidaCmd());
+  const shim = writeShim(binDir, resolveRealDidaCmd(), testProjects);
 
   if (scenario.materialsDir) {
     fs.cpSync(scenario.materialsDir, path.join(root, 'materials'), { recursive: true });

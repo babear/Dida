@@ -1,7 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { resolveTestProjects, TEST_PROJECTS } from './projects.mjs';
+import { parseProjectList, resolveTestProjects, TEST_PROJECTS } from './projects.mjs';
+
+test('parseProjectList 只切分去空白，不给默认值（shim 要区分"没配"与"配了空"）', () => {
+  assert.deepEqual(parseProjectList(' aaa , , bbb '), ['aaa', 'bbb']);
+  assert.deepEqual(parseProjectList(''), []);
+  assert.deepEqual(parseProjectList(undefined), []);
+});
 
 test('默认取 Test_1 与 Test_2 两个清单', () => {
   assert.deepEqual(resolveTestProjects({}), TEST_PROJECTS);

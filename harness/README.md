@@ -43,7 +43,7 @@ npm run test:harness  # harness 自己的单元测试，不烧 API
 |---|---|
 | `CLAUDE_EXE` | `claude` 可执行文件路径。不设时依次尝试 `<node 目录>/node_modules/@anthropic-ai/claude-code/bin/claude.exe`、`<node 目录>/../node_global/…`、`npm prefix -g` 下的同一路径；全都找不到则报错退出 |
 | `DIDA_CMD` | 真 `dida.cmd` 的绝对路径。不设时从 `PATH` 里找第一个 `dida.cmd`；找不到则报错退出（不会退化成自递归 shim） |
-| `DIDA_TEST_PROJECTS` | 测试清单 id，逗号分隔。不设时用 `Test_1` 与 `Test_2`（见 `harness/lib/projects.mjs`）。覆盖成空值会退回默认 |
+| `DIDA_TEST_PROJECTS` | 测试清单 id，逗号分隔。不设时用 `Test_1` 与 `Test_2`（见 `harness/lib/projects.mjs`）。覆盖成空值会退回默认。`run.mjs` 把它烘焙进沙箱的 `bin/lib/guard-config.mjs` 而不注入子进程环境；shim 也不读这个变量（操作者环境里若设了它，`sanitizeEnv` 会照常透传，但判定不受影响） |
 
 ## scenario
 
@@ -61,7 +61,7 @@ run-<runId>/
 │   ├── settings.json      # 只含源 settings.json 的 ANTHROPIC_* 键
 │   └── skills/dida-cli/   # 从 --skill-path 整体复制，末尾追加调用方标记
 ├── agents.json            # 从 harness/agents.json 复制，工具面限定
-├── bin/dida.cmd           # 前置到 PATH 的透传 shim
+├── bin/                   # 前置到 PATH 的 shim：dida.cmd + dida-shim.mjs + lib/
 └── materials/             # scenario 素材（若有）
 ```
 
@@ -85,19 +85,39 @@ run-<runId>/
 
 ## shim
 
-沙箱 `bin/` 下有三个文件：
+沙箱 `bin/` 下有三类文件：
 
 - `dida.cmd`：一行 shell 壳，`node dida-shim.mjs <node 可执行> <真 CLI 脚本> %*`。
-- `dida-shim.mjs`：记账 + 转发。
-- `lib/`：shim 只依赖的三个模块（`calllog.mjs`、`created.mjs`、`shim.mjs`）。
+- `dida-shim.mjs`：判定 + 记账 + 转发。
+- `lib/`：shim 只依赖的三个模块（`calllog.mjs`、`created.mjs`、`guard.mjs`），外加沙箱生成时烘焙的 `guard-config.mjs`（测试清单集合）。
 
 **为什么不是 `CALL "<真 dida.cmd>" %*`**：实测 `.cmd` 的 `%*` 转发在含换行的参数上会截断到第一行，`%VAR%` 也会被展开。改成从真 `.cmd` 里解析出 node 与脚本入口后直接 spawn，argv 由 `CreateProcess` 原样传递，空格、引号、中文、`|`、`&`、`%` 都保真。解析不到入口时直接报错，不降级成自递归。
 
-**记账**：每次调用在转发**之前**追加一行到 `runs/<runId>/calls.ndjson`，内容为 `{argv, at}`，`argv` 是数组而非命令字符串。`task create` 成功后从 stdout 抠出任务 id（`ID: <24 位十六进制>` 或 `--json` 的对象），追加到 `runs/<runId>/created.ndjson`（一行一条）。
+**记账**：每次调用在判定**之后**、转发**之前**追加一行到 `runs/<runId>/calls.ndjson`，内容为 `{argv, at, decision}`；被拒时另带 `reason` 与 `targets`（越界的那几个清单 id）。被拒的调用也记一条——它确实发生过。`task create` 成功后从 stdout 抠出任务 id（`ID: <24 位十六进制>` 或 `--json` 的对象），追加到 `runs/<runId>/created.ndjson`（一行一条）。
 
-**与 ADR-0004 的偏离**：目标清单校验与越界写入拒绝属于 #6，尚未实现。记账只做事实记录，不做拦截。
+### 越界写入防护
 
-**已知边界**：参数在 `dida.cmd` 这一层已经由 cmd 解析过一遍，多行 `--content` 会在这里被截成第一行。修法要绕开 `.cmd` 形态本身，另开 issue 追踪。
+**一条规则：对写命令解析目标清单；解析不出目标、或目标不在测试清单集合内，就拒绝。** 写请求根本不会发出去（见 ADR-0011）。
+
+| 命令 | 目标清单来源 |
+|---|---|
+| `task create` / `task update` | `--project`；`update` 还要求位置参数 `<taskId>` 与 `--id` 相同 |
+| `task move` | `--from` 与 `--to`（可重复、可多值），任一越界即拒 |
+| `task complete` / `delete` / `comment add` / `comment delete` | 位置参数 1 |
+| `task assign` / `unassign` / `complete-batch` | `--project` |
+| `project update` / `delete` / `column create` / `column update` | 位置参数 1 |
+
+其余写命令（`project create`、`project group *`、`habit *`、`focus *`、`tag *`、`auth login/logout/token`）没有可判定的目标清单，**一律拒绝**。读命令放行；既不在写表也不在读表的命令按未知拒绝，不默认放行。
+
+- 拒绝时 stderr 一行 `DIDA API 错误 404: {...}`（`resource_not_found`，`errorId` 每次随机），stdout 为空，退出码 1——与真 CLI 在 API 失败时的形态一致，不暴露这是评测环境。
+- 测试清单集合在生成沙箱时烘焙进 `bin/lib/guard-config.mjs`，**不从环境变量读**：被测 agent 能读能改进程环境，从 env 读白名单等于把判定权交给它。
+- **这个防护不是只读的**：`bin/` 在沙箱内，agent 的工具面里有 `Write`，可以覆写 `guard-config.mjs` 后让 shim 放行。要真正堵住需要把白名单放到 agent 写不到的位置，与「沙箱不隔离文件系统」同源，见 #3。
+- 只给到命令组（`dida task`、`dida project group`）或接在组名后的 `help`（`task help`、`project group help`）只打印用法，照常放行。
+- 转发时把真 CLI 错误路径上那行 `Assertion failed: … UV_HANDLE_CLOSING` 滤掉。
+- 参数解析复刻 commander 语义：`--flag=value`、flag 夹在位置参数中间、`--` 之后一律当位置参数、重复 flag 全部校验、`--project=` 空值视为解析不出目标。
+- 写命令缺 `--project` 时错误文本与真 CLI 不同（真 CLI 报 required option），两条路都写不出去。
+
+**已知边界**：参数在 `dida.cmd` 这一层已经由 cmd 解析过一遍，多行 `--content` 会在这里被截成第一行。修法要绕开 `.cmd` 形态本身，另开 issue 追踪。agent 仍可用绝对路径直接调真 `dida.cmd` 绕过 shim，靠 `crossCheck` 在报告里标出来。
 
 ## 产物
 
@@ -106,7 +126,7 @@ run-<runId>/
 | 文件 | 内容 |
 |---|---|
 | `trace.ndjson` | 被测会话的原始轨迹 |
-| `calls.ndjson` | shim 记下的调用序列，每行 `{argv, at}` |
+| `calls.ndjson` | shim 记下的调用序列，每行 `{argv, at, decision}`；被拒的另有 `reason` 与 `targets` |
 | `created.ndjson` | 本 run 建成并立刻记账的任务，一行一条；清场与断言都只认这一份 |
 | `manifest.json` | 沙箱绝对路径、skill 指纹与文件数、git rev 与 dirty、三层模型信息、工具面、轮数、成本、调用数、创建数、清场结果、标记 |
 | `report.md` | 给人读的报告：首行是 skill 指纹 / 模型 / 沙箱路径，中间是本次创建的任务 id 表，末尾是摘要 |
@@ -117,6 +137,7 @@ run-<runId>/
 
 ## 已知边界
 
-- 沙箱只隔离工作目录，不隔离文件系统：agent 仍可用绝对路径读沙箱外的文件。见 #3。
+- 沙箱只隔离工作目录，不隔离文件系统：agent 仍可用绝对路径读沙箱外的文件，也可用绝对路径直接调真 `dida.cmd` 绕过 shim；`bin/lib/guard-config.mjs` 也在它的可写范围内。见 #3。
 - 轮数看门狗与预算护栏未实现，见 #11。
-- 多行 `--content` 在 `dida.cmd` 的 `%*` 层会被截成第一行（见上文 shim 段）。
+- 多行 `--content` 在 `dida.cmd` 的 `%*` 层会被截成第一行（见上文 shim 段）。见 #13。
+- 越界写入防护只覆盖有目标清单的写命令；`habit *`、`focus *`、`tag *`、`project create`、`project group *` 一律拒绝，而不是校验它们的目标。

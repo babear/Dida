@@ -94,13 +94,16 @@ harness 是仓库根目录下的一个 Node 模块目录，入口是一个可执
 
 ### shim 规则
 
-单份 `dida.cmd`，记账后原样转发给真 `dida.cmd`，退出码透传。
+单份 `dida.cmd`，判定与记账后原样转发给真 `dida.cmd`，退出码透传。
 
-目标清单的解析规则：`task create` / `task update` 取 `--project`；`task move` 取 `--from` 与 `--to`；其余写命令取位置参数中的 projectId。所有解析出的目标必须 ∈ 测试清单集合。
+目标清单的解析规则逐命令声明，见 ADR-0011。所有解析出的目标必须 ∈ 测试清单集合；测试清单集合在生成沙箱时烘焙进 `bin/lib/guard-config.mjs`，不走环境变量——被测 agent 能读也能改进程环境。
+
+**一条规则：解析不出目标，或目标不在测试清单集合内，就拒绝。** 没有可判定目标的写命令（`project create`、`project group *`、`habit *`、`focus *`、`tag *`、`auth login/logout/token`）同样拒绝，不默认放行。逐命令的目标来源见 ADR-0011。
+
+- `task update` 的定位键是 body 里的 `--id`，`--project` 只写进 `projectId`；两者不一致时一次"目标清单合法"的调用仍可能改到别的清单里的任务，因此要求位置参数 `<taskId>` 与 `--id` 相同，否则拒绝。
+- `task complete-batch` 的 `--project` 是**可选**参数，省略时写进收集箱——这与 `create` / `update` 不同，缺省必须拒绝。
 
 拒绝时输出与真 CLI 同构的 API 错误文本与退出码 1，不暴露测试机制。转发时吞掉真 CLI 在错误路径上打出的 Node 断言行。
-
-`task create` 与 `task update` 的 `--project` 都是必填参数（实测省略会报 `required option`），因此"漏传导致写进收集箱"不构成风险，只需判定显式传入的值。
 
 ### 测试清单
 

@@ -141,6 +141,24 @@ test('报告写明调用日志与轨迹是否对得上', () => {
   assert.match(bad, /绕过/);
 });
 
+test('有写命令被拒时，报告与摘要按原因分开写', () => {
+  const manifest = { ...MANIFEST, calls: { ...MANIFEST.calls, rejected: 3, outOfBounds: 2 } };
+  const report = renderReport(manifest);
+  assert.match(report, /被拒绝的写命令 3 次/);
+  assert.match(report, /越界写入 2 次/);
+  assert.match(report, /解析不出目标 1 次/);
+  assert.match(renderSummary(manifest), /3 次写命令被当场拒绝/);
+});
+
+test('只有越界写入时不提解析不出目标', () => {
+  const manifest = { ...MANIFEST, calls: { ...MANIFEST.calls, rejected: 2, outOfBounds: 2 } };
+  assert.doesNotMatch(renderReport(manifest), /解析不出目标/);
+});
+
+test('没有写命令被拒时不写这一行', () => {
+  assert.doesNotMatch(renderReport(MANIFEST), /被拒绝的写命令/);
+});
+
 test('摘要给人读：一段话说完这次测了什么、跑了多少、建了什么', () => {
   const summary = renderSummary(MANIFEST);
   assert.match(summary, /s1-plan-to-task/);

@@ -25,7 +25,7 @@ _Avoid_: 评委、judge（除非指代码模块 `judge.mjs`）
 _Avoid_: 日志、log、trace（除非指文件名 `trace.ndjson`）
 
 **调用日志**:
-shim 记下的 `dida` 调用序列，`runs/<runId>/calls.ndjson`，每行一条 `{argv, at}`，其中 `argv` 是解析后的数组而非命令字符串。它是过程断言的独立事实源，与轨迹互为校验。
+shim 记下的 `dida` 调用序列，`runs/<runId>/calls.ndjson`，每行一条 `{argv, at, decision}`，其中 `argv` 是解析后的数组而非命令字符串；被拒的另带 `reason` 与 `targets`。它是过程断言的独立事实源，与轨迹互为校验。
 _Avoid_: 记录、shim 日志
 
 **工具面**:
@@ -49,7 +49,7 @@ _Avoid_: mock、桩、代理、wrapper
 _Avoid_: 水印、witness
 
 **测试清单**:
-`Test_1`（`69abc459ebbdbd00000009f0`）与 `Test_2`（`59f736cae4b060e424059e3b`）。所有写入必须落在其中之一。
+`Test_1`（`69abc459ebbdbd00000009f0`）与 `Test_2`（`59f736cae4b060e424059e3b`）。所有写入必须落在其中之一。这份集合同时供 shim 判定越界写入与清场使用。
 _Avoid_: 沙箱清单、测试项目
 
 **账本**:
@@ -61,7 +61,7 @@ _Avoid_: created.json、任务清单、删除列表、白名单
 _Avoid_: 清理、打扫、重置、reset
 
 **越界写入**:
-目标清单不在测试清单集合内的任何写操作。shim 必须拒绝。
+目标清单不在测试清单集合内的任何写操作。shim 在转发前判定并当场拒绝，写请求不发出去；被拒的调用记进调用日志（`decision: rejected`），不写账本（见 ADR-0011）。
 _Avoid_: 误写、非法操作
 
 **结局断言**:
