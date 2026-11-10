@@ -269,7 +269,9 @@ async function main() {
 }
 
 // 作为模块被测试 import 时不要执行 main；只有直接运行时才进 CLI。
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+// 用 import.meta.main 而非比较 process.argv[1]：经 junction / 符号链接调用时
+// argv[1] 是链接路径、import.meta.url 是真实路径，比较不成立会静默空跑。
+if (import.meta.main) {
   main().catch((error) => {
     console.error(error.stack ?? String(error));
     process.exitCode = 1;
