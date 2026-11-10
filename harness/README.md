@@ -43,7 +43,7 @@ npm run test:harness  # harness 自己的单元测试，不烧 API
 |---|---|
 | `CLAUDE_EXE` | `claude` 可执行文件路径。不设时依次尝试 `<node 目录>/node_modules/@anthropic-ai/claude-code/bin/claude.exe`、`<node 目录>/../node_global/…`、`npm prefix -g` 下的同一路径；全都找不到则报错退出 |
 | `DIDA_CMD` | 真 `dida.cmd` 的绝对路径。不设时从 `PATH` 里找第一个 `dida.cmd`；找不到则报错退出（不会退化成自递归 shim） |
-| `DIDA_TEST_PROJECTS` | 测试清单 id，逗号分隔。不设时用 `Test_1` 与 `Test_2`（见 `harness/lib/projects.mjs`）。覆盖成空值会退回默认。`run.mjs` 把它烘焙进沙箱的 `bin/lib/guard-config.mjs`，**不注入子进程环境**——被测 agent 能改进程环境，从 env 读白名单等于把判定权交给它 |
+| `DIDA_TEST_PROJECTS` | 测试清单 id，逗号分隔。不设时用 `Test_1` 与 `Test_2`（见 `harness/lib/projects.mjs`）。覆盖成空值会退回默认。`run.mjs` 把它烘焙进沙箱的 `bin/lib/guard-config.mjs` 而不注入子进程环境；shim 也不读这个变量（操作者环境里若设了它，`sanitizeEnv` 会照常透传，但判定不受影响） |
 
 ## scenario
 
@@ -111,6 +111,7 @@ run-<runId>/
 
 - 拒绝时 stderr 一行 `DIDA API 错误 404: {...}`（`resource_not_found`，`errorId` 每次随机），stdout 为空，退出码 1——与真 CLI 在 API 失败时的形态一致，不暴露这是评测环境。
 - 测试清单集合在生成沙箱时烘焙进 `bin/lib/guard-config.mjs`，**不从环境变量读**：被测 agent 能读能改进程环境，从 env 读白名单等于把判定权交给它。
+- **这个防护不是只读的**：`bin/` 在沙箱内，agent 的工具面里有 `Write`，可以覆写 `guard-config.mjs` 后让 shim 放行。要真正堵住需要把白名单放到 agent 写不到的位置，与「沙箱不隔离文件系统」同源，见 #3。
 - 只给到命令组（`dida task`、`dida project group`）或接在组名后的 `help`（`task help`、`project group help`）只打印用法，照常放行。
 - 转发时把真 CLI 错误路径上那行 `Assertion failed: … UV_HANDLE_CLOSING` 滤掉。
 - 参数解析复刻 commander 语义：`--flag=value`、flag 夹在位置参数中间、`--` 之后一律当位置参数、重复 flag 全部校验、`--project=` 空值视为解析不出目标。
@@ -136,7 +137,7 @@ run-<runId>/
 
 ## 已知边界
 
-- 沙箱只隔离工作目录，不隔离文件系统：agent 仍可用绝对路径读沙箱外的文件，也可用绝对路径直接调真 `dida.cmd` 绕过 shim。见 #3。
+- 沙箱只隔离工作目录，不隔离文件系统：agent 仍可用绝对路径读沙箱外的文件，也可用绝对路径直接调真 `dida.cmd` 绕过 shim；`bin/lib/guard-config.mjs` 也在它的可写范围内。见 #3。
 - 轮数看门狗与预算护栏未实现，见 #11。
 - 多行 `--content` 在 `dida.cmd` 的 `%*` 层会被截成第一行（见上文 shim 段）。见 #13。
 - 越界写入防护只覆盖有目标清单的写命令；`habit *`、`focus *`、`tag *`、`project create`、`project group *` 一律拒绝，而不是校验它们的目标。

@@ -65,7 +65,18 @@ export function resolveRealDidaCmd(searchPath = process.env.PATH ?? '') {
 const SHIM_SCRIPT_SOURCE = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'dida-shim.mjs');
 const SHIM_LIB_SOURCE = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'lib');
 
-function writeShim(binDir, realDidaCmd, allowedProjects) {
+// guard-config.mjs 的源码。测试清单集合烘焙进沙箱配置、不走环境变量：
+// 被测 agent 能改进程环境，一旦白名单从 env 来，它就能把真实清单 id 塞进去让 shim 放行。
+export function renderGuardConfig(projects) {
+  if (!Array.isArray(projects)) {
+    // 缺测试清单集合就建不出可用的沙箱：宁可当场报错，也不要生成
+    // `TEST_PROJECTS = undefined` 让 shim 在缺配置的状态下跑起来。
+    throw new Error('createSandbox 需要 testProjects：没有测试清单集合就无法生成越界判定配置');
+  }
+  return `export const TEST_PROJECTS = ${JSON.stringify(projects)};\n`;
+}
+
+export function writeShim(binDir, realDidaCmd, allowedProjects) {
   if (!realDidaCmd) {
     throw new Error('dida.cmd not found on PATH; set DIDA_CMD to the real dida.cmd');
   }
@@ -84,12 +95,7 @@ function writeShim(binDir, realDidaCmd, allowedProjects) {
   for (const name of ['calllog.mjs', 'created.mjs', 'guard.mjs']) {
     fs.copyFileSync(path.join(SHIM_LIB_SOURCE, name), path.join(libDir, name));
   }
-  // 测试清单集合烘焙进沙箱配置，不走环境变量：被测 agent 能读能改进程环境，
-  // 一旦白名单从 env 来，它就能把真实清单 id 塞进去让 shim 放行。
-  fs.writeFileSync(
-    path.join(libDir, 'guard-config.mjs'),
-    `export const TEST_PROJECTS = ${JSON.stringify(allowedProjects)};\n`,
-  );
+  fs.writeFileSync(path.join(libDir, 'guard-config.mjs'), renderGuardConfig(allowedProjects));
   fs.writeFileSync(
     path.join(binDir, 'dida.cmd'),
     renderCmdShim({ program: parsed.program, script: parsed.script, shimJs }),

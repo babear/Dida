@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 
 import { decide, parseArgv, rejectText, stripNodeAssertion } from './guard.mjs';
 import { outOfBoundsCalls, parseCallLog, rejectedCalls } from './calllog.mjs';
+import { renderGuardConfig } from './sandbox.mjs';
 
 const WHITE = '69abc459ebbdbd00000009f0';
 const WHITE2 = '59f736cae4b060e424059e3b';
@@ -353,12 +354,9 @@ describe('集成 · 真正 spawn shim', () => {
     '',
   ].join('\n');
 
-  // 白名单烘焙在沙箱配置里，和 sandbox.writeShim 的做法一致；环境变量对它无效。
+  // 用生产代码的模板生成白名单，避免测试复制一份实现后生产路径零覆盖。
   function bakeProjects(ctx, projects) {
-    fs.writeFileSync(
-      path.join(ctx.binDir, 'lib', 'guard-config.mjs'),
-      `export const TEST_PROJECTS = ${JSON.stringify(projects)};\n`,
-    );
+    fs.writeFileSync(path.join(ctx.binDir, 'lib', 'guard-config.mjs'), renderGuardConfig(projects));
   }
 
   function setup(t, projects = ALLOWED) {
@@ -372,7 +370,7 @@ describe('集成 · 真正 spawn shim', () => {
     fs.mkdirSync(path.join(binDir, 'lib'), { recursive: true });
     fs.copyFileSync(SHIM_SOURCE, path.join(binDir, 'dida-shim.mjs'));
     for (const name of fs.readdirSync(LIB_SOURCE)) {
-      if (!name.endsWith('.mjs') || name.endsWith('.test.mjs') || name === 'guard-config.mjs') continue;
+      if (!name.endsWith('.mjs') || name.endsWith('.test.mjs')) continue;
       fs.copyFileSync(path.join(LIB_SOURCE, name), path.join(binDir, 'lib', name));
     }
 
