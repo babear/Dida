@@ -16,6 +16,6 @@ Single-context: one `GLOSSARY.md` and `docs/adr/` at the repo root. See `docs/ag
 
 ## Workflow
 
-When fixing review comments, run the `/implement` flow and skip the ticket-fetching step.
+When fixing review comments, follow `~/.claude/skills/implement/SKILL.md`, skipping the ticket-fetching step.
 
 Write PR bodies with `/pr` — "push and open a PR", "open a PR", "write the PR description" all trigger it.
