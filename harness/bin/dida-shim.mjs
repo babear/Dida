@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { appendCall } from './lib/calllog.mjs';
 import { recordCreated } from './lib/created.mjs';
 import { decide, rejectText, stripNodeAssertion } from './lib/guard.mjs';
-import { parseProjectList } from './lib/projects.mjs';
+import { TEST_PROJECTS } from './lib/guard-config.mjs';
 
 // 形参由 sandbox 生成 bin/dida.cmd 时注入：<node 可执行> <真 CLI 脚本> <用户传入的 argv...>
 const [program, script, ...argv] = process.argv.slice(2);
@@ -21,11 +21,10 @@ if (!callLogPath || !createdFile) {
   process.exit(1);
 }
 
-// 测试清单集合缺失时集合为空：decide 会拒绝一切需要目标的写命令（没有可判定的边界就不放行），
-// 读命令照常转发。这里不带默认值——与清场的 resolveTestProjects 不同，shim 必须区分"没配"。
-// 拒绝的输出保持与真 CLI 同构，不暴露这是评测环境。
-const allowedProjects = parseProjectList(process.env.DIDA_TEST_PROJECTS);
-const verdict = decide(argv, allowedProjects);
+// 测试清单集合来自沙箱里烘焙好的 guard-config.mjs，不读环境变量：
+// 被测 agent 能读也能改进程环境，从 env 读白名单等于把判定权交给它。
+// 集合为空时 decide 会拒绝一切需要目标的写命令（没有可判定的边界就不放行），读命令照常转发。
+const verdict = decide(argv, TEST_PROJECTS);
 
 // 记账在转发之前：真 CLI 崩掉、或被拒没转发，都要留下"这次调用发生过"的事实。
 appendCall(callLogPath, {

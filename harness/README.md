@@ -43,7 +43,7 @@ npm run test:harness  # harness 自己的单元测试，不烧 API
 |---|---|
 | `CLAUDE_EXE` | `claude` 可执行文件路径。不设时依次尝试 `<node 目录>/node_modules/@anthropic-ai/claude-code/bin/claude.exe`、`<node 目录>/../node_global/…`、`npm prefix -g` 下的同一路径；全都找不到则报错退出 |
 | `DIDA_CMD` | 真 `dida.cmd` 的绝对路径。不设时从 `PATH` 里找第一个 `dida.cmd`；找不到则报错退出（不会退化成自递归 shim） |
-| `DIDA_TEST_PROJECTS` | 测试清单 id，逗号分隔。不设时用 `Test_1` 与 `Test_2`（见 `harness/lib/projects.mjs`）。覆盖成空值会退回默认；`run.mjs` 会把它注入沙箱，shim 缺这个变量时拒绝一切写命令 |
+| `DIDA_TEST_PROJECTS` | 测试清单 id，逗号分隔。不设时用 `Test_1` 与 `Test_2`（见 `harness/lib/projects.mjs`）。覆盖成空值会退回默认。`run.mjs` 把它烘焙进沙箱的 `bin/lib/guard-config.mjs`，**不注入子进程环境**——被测 agent 能改进程环境，从 env 读白名单等于把判定权交给它 |
 
 ## scenario
 
@@ -89,7 +89,7 @@ run-<runId>/
 
 - `dida.cmd`：一行 shell 壳，`node dida-shim.mjs <node 可执行> <真 CLI 脚本> %*`。
 - `dida-shim.mjs`：判定 + 记账 + 转发。
-- `lib/`：shim 只依赖的四个模块（`calllog.mjs`、`created.mjs`、`guard.mjs`、`shim.mjs`）。
+- `lib/`：shim 只依赖的三个模块（`calllog.mjs`、`created.mjs`、`guard.mjs`），外加沙箱生成时烘焙的 `guard-config.mjs`（测试清单集合）。
 
 **为什么不是 `CALL "<真 dida.cmd>" %*`**：实测 `.cmd` 的 `%*` 转发在含换行的参数上会截断到第一行，`%VAR%` 也会被展开。改成从真 `.cmd` 里解析出 node 与脚本入口后直接 spawn，argv 由 `CreateProcess` 原样传递，空格、引号、中文、`|`、`&`、`%` 都保真。解析不到入口时直接报错，不降级成自递归。
 
@@ -110,6 +110,8 @@ run-<runId>/
 其余写命令（`project create`、`project group *`、`habit *`、`focus *`、`tag *`、`auth login/logout/token`）没有可判定的目标清单，**一律拒绝**。读命令放行；既不在写表也不在读表的命令按未知拒绝，不默认放行。
 
 - 拒绝时 stderr 一行 `DIDA API 错误 404: {...}`（`resource_not_found`，`errorId` 每次随机），stdout 为空，退出码 1——与真 CLI 在 API 失败时的形态一致，不暴露这是评测环境。
+- 测试清单集合在生成沙箱时烘焙进 `bin/lib/guard-config.mjs`，**不从环境变量读**：被测 agent 能读能改进程环境，从 env 读白名单等于把判定权交给它。
+- 只给到命令组（`dida task`、`dida project group`）或接在组名后的 `help`（`task help`、`project group help`）只打印用法，照常放行。
 - 转发时把真 CLI 错误路径上那行 `Assertion failed: … UV_HANDLE_CLOSING` 滤掉。
 - 参数解析复刻 commander 语义：`--flag=value`、flag 夹在位置参数中间、`--` 之后一律当位置参数、重复 flag 全部校验、`--project=` 空值视为解析不出目标。
 - 写命令缺 `--project` 时错误文本与真 CLI 不同（真 CLI 报 required option），两条路都写不出去。

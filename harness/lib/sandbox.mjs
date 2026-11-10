@@ -65,7 +65,7 @@ export function resolveRealDidaCmd(searchPath = process.env.PATH ?? '') {
 const SHIM_SCRIPT_SOURCE = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'dida-shim.mjs');
 const SHIM_LIB_SOURCE = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'lib');
 
-function writeShim(binDir, realDidaCmd) {
+function writeShim(binDir, realDidaCmd, allowedProjects) {
   if (!realDidaCmd) {
     throw new Error('dida.cmd not found on PATH; set DIDA_CMD to the real dida.cmd');
   }
@@ -81,9 +81,15 @@ function writeShim(binDir, realDidaCmd) {
   // shim 只依赖这几个模块；整目录复制会把 run.mjs 无关的东西也带进沙箱。
   const libDir = path.join(binDir, 'lib');
   fs.mkdirSync(libDir, { recursive: true });
-  for (const name of ['calllog.mjs', 'created.mjs', 'guard.mjs', 'projects.mjs', 'shim.mjs']) {
+  for (const name of ['calllog.mjs', 'created.mjs', 'guard.mjs']) {
     fs.copyFileSync(path.join(SHIM_LIB_SOURCE, name), path.join(libDir, name));
   }
+  // 测试清单集合烘焙进沙箱配置，不走环境变量：被测 agent 能读能改进程环境，
+  // 一旦白名单从 env 来，它就能把真实清单 id 塞进去让 shim 放行。
+  fs.writeFileSync(
+    path.join(libDir, 'guard-config.mjs'),
+    `export const TEST_PROJECTS = ${JSON.stringify(allowedProjects)};\n`,
+  );
   fs.writeFileSync(
     path.join(binDir, 'dida.cmd'),
     renderCmdShim({ program: parsed.program, script: parsed.script, shimJs }),
@@ -91,7 +97,7 @@ function writeShim(binDir, realDidaCmd) {
   return { program: parsed.program, script: parsed.script };
 }
 
-export function createSandbox({ runId, skillPath, agentsSourcePath, scenario, settingsPath }) {
+export function createSandbox({ runId, skillPath, agentsSourcePath, scenario, settingsPath, testProjects }) {
   const root = path.join(os.tmpdir(), `run-${runId}`);
   const configDir = path.join(root, '.claude');
   const binDir = path.join(root, 'bin');
@@ -116,7 +122,7 @@ export function createSandbox({ runId, skillPath, agentsSourcePath, scenario, se
   // 定义文件是唯一事实源，坏掉要在建沙箱时就报，而不是等 claude -p 起来后从 stderr 里猜
   toolFaceOf(agentsPath);
 
-  const shim = writeShim(binDir, resolveRealDidaCmd());
+  const shim = writeShim(binDir, resolveRealDidaCmd(), testProjects);
 
   if (scenario.materialsDir) {
     fs.cpSync(scenario.materialsDir, path.join(root, 'materials'), { recursive: true });

@@ -96,7 +96,7 @@ harness 是仓库根目录下的一个 Node 模块目录，入口是一个可执
 
 单份 `dida.cmd`，判定与记账后原样转发给真 `dida.cmd`，退出码透传。
 
-目标清单的解析规则：`task create` / `task update` 取 `--project`；`task move` 取 `--from` 与 `--to`；其余写命令取位置参数中的 projectId。所有解析出的目标必须 ∈ 测试清单集合。
+目标清单的解析规则逐命令声明，见 ADR-0011。所有解析出的目标必须 ∈ 测试清单集合；测试清单集合在生成沙箱时烘焙进 `bin/lib/guard-config.mjs`，不走环境变量——被测 agent 能读也能改进程环境。
 
 **一条规则：解析不出目标，或目标不在测试清单集合内，就拒绝。** 没有可判定目标的写命令（`project create`、`project group *`、`habit *`、`focus *`、`tag *`、`auth login/logout/token`）同样拒绝，不默认放行。逐命令的目标来源见 ADR-0011。
 

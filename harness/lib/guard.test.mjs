@@ -52,8 +52,14 @@ describe('放行 · 只读命令', () => {
     ['task'],                 // `dida task`：打印该组用法
     ['project'],
     ['habit'],
+    ['project', 'group'],     // 嵌套组：真 CLI 同样只打印用法
+    ['project', 'column'],
+    ['task', 'comment'],
+    ['habit', 'section'],
     ['task', 'help'],         // `dida task help`
     ['project', 'help'],
+    ['project', 'group', 'help'],   // 嵌套组的 help
+    ['task', 'comment', 'help'],
     ['task', 'create', '--help'],   // --help 在命令分发前被 commander 处理
     ['task', '--help'],
     ['project', 'delete', '-h'],
@@ -266,7 +272,7 @@ describe('拒绝文本', () => {
   test('形如真 CLI 的 API 错误，写在 stderr 的一行', () => {
     const text = rejectText({ id: BLACK });
     assert.match(text, /^DIDA API 错误 404: \{.*\}$/);
-    assert.ok(!text.endsWith('\n') || text.endsWith('\n'));
+    assert.ok(!text.endsWith('\n'), '换行由调用方补，函数本身不带');
   });
 
   test('正文是可解析的 JSON，字段与真 CLI 一致', () => {
@@ -347,7 +353,15 @@ describe('集成 · 真正 spawn shim', () => {
     '',
   ].join('\n');
 
-  function setup(t) {
+  // 白名单烘焙在沙箱配置里，和 sandbox.writeShim 的做法一致；环境变量对它无效。
+  function bakeProjects(ctx, projects) {
+    fs.writeFileSync(
+      path.join(ctx.binDir, 'lib', 'guard-config.mjs'),
+      `export const TEST_PROJECTS = ${JSON.stringify(projects)};\n`,
+    );
+  }
+
+  function setup(t, projects = ALLOWED) {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'guard-test-'));
     t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
     const fakePath = path.join(dir, 'fake.mjs');
@@ -358,11 +372,11 @@ describe('集成 · 真正 spawn shim', () => {
     fs.mkdirSync(path.join(binDir, 'lib'), { recursive: true });
     fs.copyFileSync(SHIM_SOURCE, path.join(binDir, 'dida-shim.mjs'));
     for (const name of fs.readdirSync(LIB_SOURCE)) {
-      if (!name.endsWith('.mjs') || name.endsWith('.test.mjs')) continue;
+      if (!name.endsWith('.mjs') || name.endsWith('.test.mjs') || name === 'guard-config.mjs') continue;
       fs.copyFileSync(path.join(LIB_SOURCE, name), path.join(binDir, 'lib', name));
     }
 
-    return {
+    const ctx = {
       dir,
       fakePath,
       binDir,
@@ -370,6 +384,8 @@ describe('集成 · 真正 spawn shim', () => {
       callLog: path.join(dir, 'calls.ndjson'),
       created: path.join(dir, 'created.ndjson'),
     };
+    bakeProjects(ctx, projects);
+    return ctx;
   }
 
   function runShim(env, ctx, argv) {
@@ -392,7 +408,7 @@ describe('集成 · 真正 spawn shim', () => {
 
   test('越界写入被拒：假 CLI 从未被启动', (t) => {
     const ctx = setup(t);
-    const result = runShim({ DIDA_TEST_PROJECTS: ALLOWED.join(',') }, ctx, ['task', 'create', '--title', 'x', '--project', BLACK]);
+    const result = runShim({}, ctx, ['task', 'create', '--title', 'x', '--project', BLACK]);
 
     assert.equal(fs.existsSync(ctx.marker), false, '写请求不该发出去');
     assert.equal(result.stdout, '');
@@ -402,7 +418,7 @@ describe('集成 · 真正 spawn shim', () => {
 
   test('被拒的调用在调用日志里留痕', (t) => {
     const ctx = setup(t);
-    runShim({ DIDA_TEST_PROJECTS: ALLOWED.join(',') }, ctx, ['task', 'delete', BLACK, 't1']);
+    runShim({}, ctx, ['task', 'delete', BLACK, 't1']);
 
     const [entry] = parseCallLog(fs.readFileSync(ctx.callLog, 'utf8'));
     assert.deepEqual(entry.argv, ['task', 'delete', BLACK, 't1']);
@@ -410,28 +426,37 @@ describe('集成 · 真正 spawn shim', () => {
     assert.equal(entry.reason, 'out-of-bounds');
   });
 
-  test('缺少测试清单集合时也拒绝，且不暴露机制', (t) => {
-    const ctx = setup(t);
-    const env = { DIDA_TEST_PROJECTS: '' };
-    const result = runShim(env, ctx, ['task', 'create', '--title', 'x', '--project', WHITE]);
+  test('测试清单集合为空时写命令被拒，且不暴露机制', (t) => {
+    const ctx = setup(t, []);
+    const result = runShim({}, ctx, ['task', 'create', '--title', 'x', '--project', WHITE]);
 
     assert.equal(fs.existsSync(ctx.marker), false);
     assert.match(result.stderr, /^DIDA API 错误 404: /);
     assert.equal(result.status, 1);
   });
 
-  test('缺少测试清单集合时读命令照常转发', (t) => {
-    const ctx = setup(t);
-    const result = runShim({ DIDA_TEST_PROJECTS: '' }, ctx, ['task', 'get', WHITE, 't1']);
+  test('测试清单集合为空时读命令照常转发', (t) => {
+    const ctx = setup(t, []);
+    const result = runShim({}, ctx, ['task', 'get', WHITE, 't1']);
 
     assert.deepEqual(JSON.parse(fs.readFileSync(ctx.marker, 'utf8')), ['task', 'get', WHITE, 't1']);
     assert.equal(result.status, 0);
   });
 
+  test('被测 agent 覆盖 DIDA_TEST_PROJECTS 也绕不过：白名单不来自环境变量', (t) => {
+    const ctx = setup(t);
+    // 模拟 agent 在 PowerShell 里把真实清单塞进环境，再调 shim
+    const result = runShim({ DIDA_TEST_PROJECTS: BLACK }, ctx, ['task', 'create', '--title', 'x', '--project', BLACK]);
+
+    assert.equal(fs.existsSync(ctx.marker), false, '写请求不该发出去');
+    assert.equal(result.status, 1);
+    assert.equal(parseCallLog(fs.readFileSync(ctx.callLog, 'utf8'))[0].decision, 'rejected');
+  });
+
   test('目标合法：原样转发，argv 一致', (t) => {
     const ctx = setup(t);
     const argv = ['task', 'create', '--title', '含 空格', '--project', WHITE];
-    const result = runShim({ DIDA_TEST_PROJECTS: ALLOWED.join(',') }, ctx, argv);
+    const result = runShim({}, ctx, argv);
 
     assert.deepEqual(JSON.parse(fs.readFileSync(ctx.marker, 'utf8')), argv);
     assert.equal(result.status, 0);
@@ -445,7 +470,7 @@ describe('集成 · 真正 spawn shim', () => {
       FAKE_EXIT: '0',
     };
     const argv = ['task', 'create', '--title', 'x', '--project', WHITE];
-    const viaShim = runShim({ DIDA_TEST_PROJECTS: ALLOWED.join(','), ...overrides }, ctx, argv);
+    const viaShim = runShim(overrides, ctx, argv);
     const direct = spawnSync(process.execPath, [ctx.fakePath, ...argv], {
       encoding: 'utf8',
       windowsHide: true,
@@ -459,7 +484,7 @@ describe('集成 · 真正 spawn shim', () => {
   test('退出码透传', (t) => {
     const ctx = setup(t);
     for (const code of ['0', '3']) {
-      const result = runShim({ DIDA_TEST_PROJECTS: ALLOWED.join(','), FAKE_EXIT: code }, ctx, ['task', 'get', WHITE, 't1']);
+      const result = runShim({ FAKE_EXIT: code }, ctx, ['task', 'get', WHITE, 't1']);
       assert.equal(result.status, Number(code));
     }
   });
@@ -468,7 +493,6 @@ describe('集成 · 真正 spawn shim', () => {
     const ctx = setup(t);
     const result = runShim(
       {
-        DIDA_TEST_PROJECTS: ALLOWED.join(','),
         FAKE_STDERR: 'DIDA API 错误 500: {"x":1}\nAssertion failed: !(handle->flags & UV_HANDLE_CLOSING), file src\\win\\async.c, line 76\r\n',
         FAKE_EXIT: '1',
       },
@@ -478,5 +502,40 @@ describe('集成 · 真正 spawn shim', () => {
 
     assert.match(result.stderr, /DIDA API 错误 500/);
     assert.doesNotMatch(result.stderr, /UV_HANDLE_CLOSING/);
+  });
+
+  // 这条之前没有：把 shim 的 `if (!verdict.allow)` 收窄成只认 out-of-bounds，
+  // 全部单测仍然全绿，而 id-mismatch 之类的写会被真的转发出去。
+  const REJECTIONS = [
+    ['清单越界', 'out-of-bounds', ['task', 'delete', BLACK, 't1']],
+    ['解析不出目标', 'no-target', ['task', 'create', '--title', 'x']],
+    ['双 id 不一致', 'id-mismatch', ['task', 'update', 't1', '--id', 't2', '--project', WHITE]],
+    ['未知命令', 'unknown-command', ['task', 'frobnicate', '--project', WHITE]],
+    ['无目标清单的写命令', 'no-target', ['habit', 'checkin', 'h1', '--stamp', '20260101']],
+  ];
+
+  for (const [label, reason, argv] of REJECTIONS) {
+    test(`每一种拒绝原因都不转发：${label}`, (t) => {
+      const ctx = setup(t);
+      const result = runShim({}, ctx, argv);
+
+      assert.equal(fs.existsSync(ctx.marker), false, `${label}不该发出去`);
+      assert.equal(result.stdout, '');
+      assert.match(result.stderr, /^DIDA API 错误 404: /);
+      assert.equal(result.status, 1);
+      const [entry] = parseCallLog(fs.readFileSync(ctx.callLog, 'utf8'));
+      assert.equal(entry.decision, 'rejected');
+      assert.equal(entry.reason, reason);
+    });
+  }
+
+  test('放行路径也在调用日志里记 decision: allow', (t) => {
+    const ctx = setup(t);
+    runShim({}, ctx, ['task', 'create', '--title', 'x', '--project', WHITE]);
+
+    const entries = parseCallLog(fs.readFileSync(ctx.callLog, 'utf8'));
+    assert.equal(entries.length, 1);
+    assert.equal(entries[0].decision, 'allow');
+    assert.deepEqual(entries[0].argv, ['task', 'create', '--title', 'x', '--project', WHITE]);
   });
 });

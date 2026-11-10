@@ -109,6 +109,7 @@ async function runOne(options, id, projects) {
     agentsSourcePath: AGENTS_SOURCE_PATH,
     scenario,
     settingsPath: options.settingsPath,
+    testProjects: projects,
   });
 
   const transcriptPath = path.join(runDir, 'trace.ndjson');
@@ -121,10 +122,10 @@ async function runOne(options, id, projects) {
 
   const env = { ...sanitizeEnv(process.env), CLAUDE_CONFIG_DIR: sandbox.configDir };
   env.PATH = `${sandbox.binDir}${path.delimiter}${env.PATH ?? ''}`;
-  // shim 靠这三个环境变量记账与判越界；它们只指向本 run 的账本与测试清单，不含断言内容。
+  // shim 靠这两个环境变量定位本 run 的账本。测试清单集合不走环境变量：
+  // 被测 agent 能读也能改进程环境，白名单必须烘焙在沙箱配置里。
   env.DIDA_CALL_LOG = callLogPath;
   env.DIDA_CREATED_FILE = createdFile;
-  env.DIDA_TEST_PROJECTS = projects.join(',');
   const session = await runSession({ argv, cwd: sandbox.root, env, transcriptPath });
 
   const events = parseTranscript(transcriptPath);

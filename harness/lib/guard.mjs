@@ -124,6 +124,18 @@ const COMMAND_GROUPS = new Set([
   'auth', 'preference', 'task', 'project', 'habit', 'focus', 'tag', 'countdown',
 ]);
 
+// 命令组里的嵌套组（`dida project group`、`dida task comment`、`dida habit section`）。
+// 只给到这个深度同样只打印用法；再往下一层才是子命令。
+const NESTED_GROUPS = new Set([
+  'project group', 'project column', 'task comment', 'habit section',
+]);
+
+// argv 是否恰好停在某一层命令组上（不含任何子命令）。
+function isCommandGroup(argv) {
+  if (argv.length === 1 && COMMAND_GROUPS.has(argv[0])) return true;
+  return argv.length === 2 && NESTED_GROUPS.has(argv.join(' '));
+}
+
 // 命令路径取 argv 前若干段里能匹配上的最长一条（task comment add 比 task comment 长）。
 // 表项有两种形状：写命令是 [path, ...sources]，读命令只给 path。
 function pathOf(entry) {
@@ -212,13 +224,16 @@ export function decide(argv, allowedProjects) {
   }
 
   // 空 argv（直接 `dida`）、`help` 子命令：只打印用法。
-  // `task help` / `task <group> help` 同理——真 CLI 打印该组用法，不执行任何写命令。
-  if (argv.length === 0 || argv[0] === 'help' || argv[1] === 'help') {
+  // `task help`、`project group help` 同理——真 CLI 打印那一层的用法，不执行任何写命令。
+  // 判断依据是 help 之前的部分确实是一个命令组，而不是随便一个位置。
+  const helpIndex = argv.indexOf('help');
+  if (argv.length === 0 || helpIndex === 0
+    || (helpIndex > 0 && isCommandGroup(argv.slice(0, helpIndex)))) {
     return { allow: true, targets: [], reason: null };
   }
 
-  // 只给出命令组（`dida task`、`dida project`）：真 CLI 打印用法并退出，不是写命令。
-  if (argv.length === 1 && COMMAND_GROUPS.has(argv[0])) {
+  // 只给到命令组（`dida task`、`dida project group`）：真 CLI 打印用法并退出，不是写命令。
+  if (isCommandGroup(argv)) {
     return { allow: true, targets: [], reason: null };
   }
 
