@@ -536,4 +536,60 @@ describe('集成 · 真正 spawn shim', () => {
     assert.equal(entries[0].decision, 'allow');
     assert.deepEqual(entries[0].argv, ['task', 'create', '--title', 'x', '--project', WHITE]);
   });
+
+  // AC5 只到 decide() 不算钉住：经 spawn 也要证明 --from 或 --to 任一越界就发不出去。
+  test('task move 的 --to 越界：经 spawn 也不转发', (t) => {
+    const ctx = setup(t);
+    const result = runShim({}, ctx, ['task', 'move', '--from', WHITE, '--to', BLACK, '--task', 't1']);
+
+    assert.equal(fs.existsSync(ctx.marker), false, '移动请求不该发出去');
+    assert.equal(result.status, 1);
+    const [entry] = parseCallLog(fs.readFileSync(ctx.callLog, 'utf8'));
+    assert.equal(entry.reason, 'out-of-bounds');
+    assert.deepEqual(entry.targets, [BLACK]);
+  });
+
+  test('task move 的 --from 越界：经 spawn 也不转发', (t) => {
+    const ctx = setup(t);
+    const result = runShim({}, ctx, ['task', 'move', '--from', BLACK, '--to', WHITE, '--task', 't1']);
+
+    assert.equal(fs.existsSync(ctx.marker), false);
+    assert.equal(result.status, 1);
+    assert.equal(parseCallLog(fs.readFileSync(ctx.callLog, 'utf8'))[0].reason, 'out-of-bounds');
+  });
+
+  test('task move 两端都合法：原样转发', (t) => {
+    const ctx = setup(t);
+    const argv = ['task', 'move', '--from', WHITE, '--to', WHITE2, '--task', 't1'];
+    const result = runShim({}, ctx, argv);
+
+    assert.deepEqual(JSON.parse(fs.readFileSync(ctx.marker, 'utf8')), argv);
+    assert.equal(result.status, 0);
+  });
+
+  // AC3：agent 面对被拒时应当把它当普通 API 错误。这里钉的是可见形态——
+  // 只有一行 API 错误、没有第二行内部信息，且比真 CLI 自己的失败不多任何东西。
+  test('被拒时的输出形态与真 CLI 的 API 失败一致', (t) => {
+    const ctx = setup(t);
+    const rejected = runShim({}, ctx, ['task', 'delete', BLACK, 't1']);
+
+    const ctx2 = setup(t);
+    const failed = runShim(
+      {
+        FAKE_STDERR: 'DIDA API 错误 500: {"errorCode":"unknown_exception"}\n'
+          + 'Assertion failed: !(handle->flags & UV_HANDLE_CLOSING), file src\\win\\async.c, line 76\r\n',
+        FAKE_EXIT: '1',
+      },
+      ctx2,
+      ['task', 'delete', WHITE, 't1'],
+    );
+
+    for (const result of [rejected, failed]) {
+      assert.equal(result.stdout, '', '真 CLI 的 API 错误只走 stderr');
+      assert.equal(result.status, 1);
+      assert.equal(result.stderr.trimEnd().split(/\r?\n/).length, 1, '只该有一行');
+      assert.match(result.stderr.trimEnd(), /^DIDA API 错误 \d+: \{.*\}$/s);
+    }
+    assert.doesNotMatch(rejected.stderr, /shim|harness|测试清单|测试机制|guard/i);
+  });
 });
