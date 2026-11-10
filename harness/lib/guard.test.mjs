@@ -49,6 +49,11 @@ describe('放行 · 只读命令', () => {
     [],                       // 直接 `dida`
     ['help'],                 // `dida help`
     ['help', 'task'],
+    ['task'],                 // `dida task`：打印该组用法
+    ['project'],
+    ['habit'],
+    ['task', 'help'],         // `dida task help`
+    ['project', 'help'],
     ['task', 'create', '--help'],   // --help 在命令分发前被 commander 处理
     ['task', '--help'],
     ['project', 'delete', '-h'],
@@ -98,6 +103,15 @@ describe('放行 · 目标清单合法', () => {
 });
 
 describe('拒绝 · 清单越界', () => {
+  test('variadic 的第一个值即使以 - 开头也照收，--help 在那里是值不是帮助', () => {
+    // 实测真 CLI：这两条都 exit 0，真的把任务移到了非测试清单
+    const a = verdict(['task', 'move', '--from', WHITE, '--to', BLACK, '--task', '--help']);
+    assert.equal(a.allow, false);
+    assert.equal(a.reason, 'out-of-bounds');
+    const b = verdict(['task', 'move', '--from', '--help', '--to', BLACK, '--task', 't1']);
+    assert.equal(b.allow, false);
+    assert.equal(b.reason, 'out-of-bounds');
+  });
   test('--help 被当成选项值消费时不算帮助，写命令照常判定', () => {
     // 真 CLI 实测：`task create --title --help --project <真实清单>` 会真的创建任务
     const result = verdict(['task', 'create', '--title', '--help', '--project', BLACK]);
@@ -198,6 +212,12 @@ describe('拒绝 · 双 id 不一致', () => {
 
   test('两者相同且目标合法：放行', () => {
     assert.equal(verdict(['task', 'update', 't1', '--id', 't1', '--project', WHITE]).allow, true);
+  });
+
+  test('--id 重复且不同：拒绝（commander 后写覆盖，body 用的是最后一个）', () => {
+    const result = verdict(['task', 'update', 't1', '--id', 't1', '--id', 't2', '--project', WHITE]);
+    assert.equal(result.allow, false);
+    assert.equal(result.reason, 'id-mismatch');
   });
 });
 

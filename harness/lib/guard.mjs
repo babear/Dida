@@ -99,22 +99,30 @@ export function parseArgv(argv) {
       continue;
     }
 
-    // 取它的值。commander 对带值选项总是消费下一个 token，即使它以 - 开头：
-    // 实测 `task filter --tag --help` 里 --help 是 tag 的值，真 CLI 照常执行。
-    // variadic 则一直吃到下一个 flag 为止。
-    while (i + 1 < argv.length) {
-      const next = argv[i + 1];
-      if (VARIADIC_FLAGS.has(flag) && maybeOption(next)) break;
+    // 取它的值。commander 对带值选项**第一个**值是无条件消费的，即使它以 - 开头；
+    // variadic 从第二个值起才遇 flag 停止（commander 13 的 parseOptions：required 选项先
+    // args.shift()，之后 activeVariadicOption 遇到 maybeOption 才收尾）。
+    // 实测 `task move --to <清单> --task --help` 里 --help 是 --task 的值，真 CLI 照常执行。
+    if (i + 1 < argv.length) {
       i += 1;
-      flags.get(flag).push(next);
-      if (!VARIADIC_FLAGS.has(flag)) break;
+      flags.get(flag).push(argv[i]);
+      while (VARIADIC_FLAGS.has(flag) && i + 1 < argv.length && !maybeOption(argv[i + 1])) {
+        i += 1;
+        flags.get(flag).push(argv[i]);
+      }
+    } else {
+      // 出现但没给值（`--project` 在结尾）：记成空串，交给判定拒绝
+      flags.get(flag).push('');
     }
-    // 出现但没给值（`--project` 在结尾）：记成空串，交给判定拒绝
-    if (flags.get(flag).length === 0) flags.get(flag).push('');
   }
 
   return { flags, positionals };
 }
+
+// 顶层命令组。只给组名时真 CLI 打印用法、不执行任何 action。
+const COMMAND_GROUPS = new Set([
+  'auth', 'preference', 'task', 'project', 'habit', 'focus', 'tag', 'countdown',
+]);
 
 // 命令路径取 argv 前若干段里能匹配上的最长一条（task comment add 比 task comment 长）。
 // 表项有两种形状：写命令是 [path, ...sources]，读命令只给 path。
@@ -179,12 +187,16 @@ function targetsOf(entry, parsed) {
 }
 
 // task update 的定位键是 --id，位置参数只是拼 URL；两者不一致时可能改到别的清单里的任务。
+// --id 重复时 commander 是后写覆盖，所以比的是最后一个。
 function idMismatch(entry, parsed) {
   for (const source of sourcesOf(entry)) {
     if (!source.sameId) continue;
-    const flagValue = flagValues(parsed, source.sameId.flag)[0];
+    const values = flagValues(parsed, source.sameId.flag);
+    const flagValue = values.at(-1);
     const positional = positionalAt(parsed, entry, source.sameId.positional);
     if (flagValue && positional && flagValue !== positional) return true;
+    // 重复给出且彼此不同：body 用的是最后一个，前面的意图不明，一并拒绝
+    if (values.length > 1 && new Set(values).size > 1) return true;
   }
   return false;
 }
@@ -200,7 +212,13 @@ export function decide(argv, allowedProjects) {
   }
 
   // 空 argv（直接 `dida`）、`help` 子命令：只打印用法。
-  if (argv.length === 0 || argv[0] === 'help') {
+  // `task help` / `task <group> help` 同理——真 CLI 打印该组用法，不执行任何写命令。
+  if (argv.length === 0 || argv[0] === 'help' || argv[1] === 'help') {
+    return { allow: true, targets: [], reason: null };
+  }
+
+  // 只给出命令组（`dida task`、`dida project`）：真 CLI 打印用法并退出，不是写命令。
+  if (argv.length === 1 && COMMAND_GROUPS.has(argv[0])) {
     return { allow: true, targets: [], reason: null };
   }
 
