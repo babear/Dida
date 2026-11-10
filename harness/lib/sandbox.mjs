@@ -2,8 +2,10 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { toolFaceOf } from './session.mjs';
+import { parseCmdShim, renderCmdShim } from './shim.mjs';
 
 export const SKILL_NAME = 'dida-cli';
 
@@ -58,15 +60,35 @@ export function resolveRealDidaCmd(searchPath = process.env.PATH ?? '') {
   return null;
 }
 
-function writePassthroughShim(binDir, realDidaCmd) {
+// shim 不是再转一次 .cmd：那样 %* 会把多行 --content 截断成第一行。
+// 改为让 .cmd 只是启动 node 记账脚本，由它 spawn 真 CLI 的入口，argv 不经过 cmd 二次解析。
+const SHIM_SCRIPT_SOURCE = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'dida-shim.mjs');
+const SHIM_LIB_SOURCE = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'lib');
+
+function writeShim(binDir, realDidaCmd, callLogPath, createdFile) {
   if (!realDidaCmd) {
     throw new Error('dida.cmd not found on PATH; set DIDA_CMD to the real dida.cmd');
   }
+  const source = fs.readFileSync(realDidaCmd, 'utf8');
+  const parsed = parseCmdShim(source, path.dirname(realDidaCmd));
+  if (!parsed) {
+    throw new Error(`无法从 ${realDidaCmd} 解析出 node 与脚本入口；shim 需要直接 spawn 真 CLI`);
+  }
+
   fs.mkdirSync(binDir, { recursive: true });
+  const shimJs = path.join(binDir, 'dida-shim.mjs');
+  fs.copyFileSync(SHIM_SCRIPT_SOURCE, shimJs);
+  // shim 只依赖这三个模块；整目录复制会把 run.mjs 无关的东西也带进沙箱。
+  const libDir = path.join(binDir, 'lib');
+  fs.mkdirSync(libDir, { recursive: true });
+  for (const name of ['calllog.mjs', 'created.mjs', 'shim.mjs']) {
+    fs.copyFileSync(path.join(SHIM_LIB_SOURCE, name), path.join(libDir, name));
+  }
   fs.writeFileSync(
     path.join(binDir, 'dida.cmd'),
-    `@ECHO off\r\nCALL "${realDidaCmd}" %*\r\nexit /b %ERRORLEVEL%\r\n`,
+    renderCmdShim({ program: parsed.program, script: parsed.script, shimJs }),
   );
+  return { program: parsed.program, script: parsed.script };
 }
 
 export function createSandbox({ runId, skillPath, agentsSourcePath, scenario, settingsPath }) {
@@ -94,7 +116,7 @@ export function createSandbox({ runId, skillPath, agentsSourcePath, scenario, se
   // 定义文件是唯一事实源，坏掉要在建沙箱时就报，而不是等 claude -p 起来后从 stderr 里猜
   toolFaceOf(agentsPath);
 
-  writePassthroughShim(binDir, resolveRealDidaCmd());
+  const shim = writeShim(binDir, resolveRealDidaCmd());
 
   if (scenario.materialsDir) {
     fs.cpSync(scenario.materialsDir, path.join(root, 'materials'), { recursive: true });
@@ -105,6 +127,7 @@ export function createSandbox({ runId, skillPath, agentsSourcePath, scenario, se
     configDir,
     binDir,
     agentsPath,
+    shim,
     callerMarker: callerMarker(runId),
     skillFingerprint,
     anthropicEnv,

@@ -25,7 +25,7 @@ _Avoid_: 评委、judge（除非指代码模块 `judge.mjs`）
 _Avoid_: 日志、log、trace（除非指文件名 `trace.ndjson`）
 
 **调用日志**:
-shim 记下的 `dida` 调用序列，每行是解析后的 argv 数组。它是过程断言的独立事实源，与轨迹互为校验。
+shim 记下的 `dida` 调用序列，`runs/<runId>/calls.ndjson`，每行一条 `{argv, at}`，其中 `argv` 是解析后的数组而非命令字符串。它是过程断言的独立事实源，与轨迹互为校验。
 _Avoid_: 记录、shim 日志
 
 **工具面**:
@@ -51,6 +51,14 @@ _Avoid_: 水印、witness
 **测试清单**:
 `Test_1`（`69abc459ebbdbd00000009f0`）与 `Test_2`（`59f736cae4b060e424059e3b`）。所有写入必须落在其中之一。
 _Avoid_: 沙箱清单、测试项目
+
+**账本**:
+`runs/<runId>/created.ndjson`，本 run 建成并**建一条即记一条**的任务记录（NDJSON，一行一条：`id` / `projectId` / `title`）。它是这条 scenario 的**唯一事实源**——断言读它，清场删它。清单里的其它任务不在这个视野里（见 ADR-0010）。
+_Avoid_: created.json、任务清单、删除列表、白名单
+
+**清场**:
+一次运行结束后，按账本删除本 run 创建的任务。清单里其它任务一概不碰——不检测、不报告。永不完全清空清单（见 ADR-0006、ADR-0010）。
+_Avoid_: 清理、打扫、重置、reset
 
 **越界写入**:
 目标清单不在测试清单集合内的任何写操作。shim 必须拒绝。
