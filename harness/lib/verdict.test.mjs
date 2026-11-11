@@ -14,6 +14,20 @@ test('断言全过时报告写「通过」，不点名任何断言', () => {
   assert.doesNotMatch(text, /父任务正文非空/);
 });
 
+test('快照取不到（broken）写成「结果不可归因，需重跑」，不写成用例配置错误', () => {
+  const text = renderVerdict({
+    assertion: {
+      status: 'broken',
+      detail: '取终态快照失败：列清单 p 的任务失败：网络抖动',
+      results: [{ ok: false, name: '终态快照不可用', expected: '能列出测试清单', actual: '网络抖动' }],
+    },
+    session: SESSION_OK,
+  });
+  assert.match(text, /不可归因/);
+  assert.match(text, /网络抖动/);
+  assert.doesNotMatch(text, /用例配置错误/);
+});
+
 test('旧 manifest（没有 assertion 字段）不写「通过」——它根本没评过', () => {
   const text = renderVerdict({ assertion: undefined, session: SESSION_OK });
   assert.doesNotMatch(text, /结局断言 通过/);

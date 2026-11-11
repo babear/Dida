@@ -20,7 +20,7 @@ npm run test:harness  # harness 自己的单元测试，不烧 API
 | `--hold` | 关 | 跑完不清场，留现场给人看；之后用 `--clean <runId>` 收尾 |
 | `--clean <runId>` | — | 只按该 run 的 `created.ndjson` 删除任务，然后退出 |
 
-退出码：任一 scenario 断言未通过、会话非零退出或超时、用例配置错误（缺 `assert.mjs` 或断言模块加载失败）、清场中止或删除失败，都是 1。
+退出码：任一 scenario 断言未通过、会话非零退出或超时、用例配置错误（缺 `assert.mjs` 或断言模块加载失败）、终态快照取不到、清场中止或删除失败，都是 1。
 
 ### 清场纪律
 
@@ -76,7 +76,7 @@ npm run test:harness  # harness 自己的单元测试，不烧 API
 2. **过程断言**：调用日志 argv 序列上的三条硬规则，见 ADR-0005。第 3 条（越界写入）现由 shim 当场拒绝并记 `rejected`，只需接进判定。
 3. **结局断言**：读终态快照 `runs/<runId>/state.json`——账本里每个 id 取回的任务现状，取不到的记 `null`。定位与清场同一套：先按测试清单枚举再按 id 找，不信账本记的 `projectId`（agent 可能用 `task move` 挪走任务），枚举不到才回退到账本值直查。
 
-**当前判定口径**：会话正常结束（`PASSED` / `FAILED` / `INCOMPLETE`）+ 结局断言。缺 `assert.mjs` 判 `MISCONFIGURED`，不开会话，但照样落一份只含判定的报告（`runs/<runId>/`）。`--scenario` 写错 id 报 `NOT FOUND`，与缺断言分开。可信度检查与过程断言分别归 #8 与 #18。
+**当前判定口径**：会话正常结束（`PASSED` / `FAILED` / `INCOMPLETE`）+ 结局断言。缺 `assert.mjs` 判 `MISCONFIGURED`，不开会话，但照样落一份只含判定的报告（`runs/<runId>/`）。快照取不到判 `INVALID`——结果不可归因，需重跑，不当作 skill 缺陷。`--scenario` 写错 id 报 `NOT FOUND`，与缺断言分开。可信度检查与过程断言分别归 #8 与 #18。
 
 ## 沙箱
 
