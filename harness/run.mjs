@@ -6,14 +6,16 @@ import { fileURLToPath } from 'node:url';
 
 import { createSandbox, resolveRealDidaCmd, SKILL_NAME } from './lib/sandbox.mjs';
 import { parseCmdShim } from './lib/shim.mjs';
-import { buildSessionArgv, runSession, parseTranscript, sanitizeEnv, summarizeTranscript } from './lib/session.mjs';
+import { buildSessionArgv, runSession, parseTranscript, sanitizeEnv, sessionCompleted, summarizeTranscript } from './lib/session.mjs';
 import { defaultSettingsPath, ensureRunsDir, gitState, modelInfo, runId } from './lib/provenance.mjs';
 import { listScenarios, loadScenario } from './lib/scenario.mjs';
+import { loadAssert, runAssert } from './lib/assertion.mjs';
+import { buildState } from './lib/state.mjs';
 import { crossCheck, outOfBoundsCalls, parseCallLog, rejectedCalls } from './lib/calllog.mjs';
 import { readCreated } from './lib/created.mjs';
 import { cleanRun } from './lib/cleanup.mjs';
 import { resolveTestProjects } from './lib/projects.mjs';
-import { renderReport } from './lib/report.mjs';
+import { formatValue, renderReport } from './lib/report.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const AGENTS_SOURCE_PATH = path.join(repoRoot, 'harness', 'agents.json');
@@ -96,7 +98,7 @@ function reportCleanup(cleanup, run) {
   }
 }
 
-async function runOne(options, id, projects) {
+async function runOne(options, id, projects, assertionFn) {
   const scenario = loadScenario(repoRoot, id);
   const runKey = runId();
   const runsDir = ensureRunsDir(repoRoot);
@@ -132,7 +134,29 @@ async function runOne(options, id, projects) {
   const summary = summarizeTranscript(events);
   const git = gitState(repoRoot);
   const sourceEnv = sandbox.anthropicEnv;
+  const created = readCreated(createdFile);
   const calls = fs.existsSync(callLogPath) ? parseCallLog(fs.readFileSync(callLogPath, 'utf8')) : [];
+
+  // 终态快照在清场之前取：清场删的正是这些任务，删完再取只能拿到 null。
+  // 快照落盘供重放（用户故事 43）：断言改了之后不必再烧一次 API。
+  const state = buildState({ dida: realDida(), created });
+  const statePath = path.join(runDir, 'state.json');
+  fs.writeFileSync(statePath, JSON.stringify(state, null, 2));
+
+  const sessionInfo = {
+    exitCode: session.exitCode,
+    timedOut: session.timedOut,
+    turns: summary.turns,
+    costUsd: summary.costUsd,
+  };
+  const completed = sessionCompleted(session);
+
+  // 会话没正常结束时终态不可归因，断言不评。缺断言已经在 main 里挡掉，走不到这里。
+  let assertion = { status: 'skipped', results: [] };
+  if (completed) {
+    const results = await runAssert(assertionFn, { tasks: state, created, calls, session: sessionInfo });
+    assertion = { status: results.every((result) => result.ok) ? 'passed' : 'failed', results };
+  }
 
   const manifest = {
     run: runKey,
@@ -163,7 +187,9 @@ async function runOne(options, id, projects) {
       outOfBounds: outOfBoundsCalls(calls).length,
       crossCheck: crossCheck(calls, summary.toolCalls),
     },
-    created: readCreated(createdFile),
+    created,
+    state: { path: statePath, count: state.length },
+    assertion,
     testProjects: projects,
     callerMarker: sandbox.callerMarker,
   };
@@ -177,6 +203,26 @@ function writeManifest(runDir, manifest) {
 
 function writeReport(runDir, manifest) {
   fs.writeFileSync(path.join(runDir, 'report.md'), `${renderReport(manifest)}\n`);
+}
+
+// 缺断言也要留下报告：AC 要求报告里能读到「缺断言」，而不只是 stderr 一行。
+// 不建沙箱、不开会话，只落一份最小 manifest 与报告。
+export function writeMissingAssertRun(repoRoot, id, scenarioDir, skillPath) {
+  const runKey = runId();
+  const runDir = path.join(ensureRunsDir(repoRoot), runKey);
+  fs.mkdirSync(runDir, { recursive: true });
+  const manifest = {
+    run: runKey,
+    scenario: id,
+    skill: { source: skillPath },
+    assertion: { status: 'missing', results: [] },
+    created: [],
+    calls: {},
+    session: {},
+  };
+  writeManifest(runDir, manifest);
+  writeReport(runDir, manifest);
+  return { runKey, runDir, assertPath: path.join(scenarioDir, 'assert.mjs') };
 }
 
 async function main() {
@@ -229,10 +275,36 @@ async function main() {
 
   let failures = 0;
   for (const id of ids) {
-    const { run, runDir, sandbox, manifest, session, createdFile } = await runOne(options, id, projects);
-    const sessionCompleted = session.exitCode === 0 && !session.timedOut;
+    // 缺 assert.mjs 不开会话：两个目录（scenarios/ 与 probes/）的区分就是有没有断言，
+    // 跳过会让漏写的用例静默退出回归网、退出码仍是 0。这是用例配置错误，不是断言未通过。
+    // loadScenario 单独拿出来：--scenario 写错 id 要报「找不到」，不能混成缺断言。
+    let scenario;
+    try {
+      scenario = loadScenario(repoRoot, id);
+    } catch (error) {
+      console.error(`NOT FOUND ${id}  ${error.message}`);
+      failures += 1;
+      continue;
+    }
+    let assertionFn;
+    try {
+      assertionFn = await loadAssert(scenario.dir);
+    } catch (error) {
+      console.error(`MISCONFIGURED ${id}  断言模块加载失败：${error.message}`);
+      failures += 1;
+      continue;
+    }
+    if (!assertionFn) {
+      const { runKey, runDir, assertPath } = writeMissingAssertRun(repoRoot, id, scenario.dir, options.skillPath);
+      console.error(`MISCONFIGURED ${id}  缺断言：${path.relative(repoRoot, assertPath)}（报告 ${path.relative(repoRoot, runDir)}，run=${runKey}）`);
+      failures += 1;
+      continue;
+    }
 
-    const retained = !sessionCompleted || options.keepSandbox || options.hold;
+    const { run, runDir, sandbox, manifest, session, createdFile } = await runOne(options, id, projects, assertionFn);
+    const completed = sessionCompleted(session);
+
+    const retained = !completed || options.keepSandbox || options.hold;
 
     // 先把会话事实落盘，再动清单：清场读账本出错时，manifest 与 report 必须已经在了。
     writeManifest(runDir, { ...manifest, cleanup: null, sandboxRetained: retained });
@@ -240,7 +312,7 @@ async function main() {
     // 只按账本删。会话没正常结束时连任务一起保留现场，由 --clean 显式收尾。
     let cleanup;
     try {
-      cleanup = options.hold || !sessionCompleted
+      cleanup = options.hold || !completed
         ? emptyCleanup({ deferred: true })
         : cleanRun({ dida: realDida(), projects, createdFile });
     } catch (error) {
@@ -254,19 +326,26 @@ async function main() {
     // 清场失败只记 log 不中断：每条 scenario 的账本按 runId 隔离，删不掉自己的那几条
     // 不会影响下一条的判断。退出码仍非零，让人知道有现场要收。
     const cleanupProblem = hasCleanupProblem(cleanup);
-    if (!sessionCompleted || cleanupProblem) failures += 1;
+    if (!completed || cleanupProblem || manifest.assertion.status === 'failed') failures += 1;
 
-    console.log(`${sessionCompleted ? 'COMPLETED' : 'INCOMPLETE'} ${id}  run=${run}`);
+    const verdict = manifest.assertion.status === 'skipped'
+      ? 'INCOMPLETE'
+      : manifest.assertion.status === 'passed' ? 'PASSED' : 'FAILED';
+    console.log(`${verdict} ${id}  run=${run}`);
     console.log(`  skill sha256=${manifest.skill.sha256.slice(0, 16)} files=${manifest.skill.files} git=${manifest.skill.git.rev?.slice(0, 12)}${manifest.skill.git.dirty ? ' (dirty)' : ''}`);
     console.log(`  model alias=${manifest.model.requested_alias} provider=${manifest.model.provider}（别名不等于实际执行模型，真实映射见 manifest.model.alias_mapping）`);
     console.log(`  sandbox=${sandbox.root}${retained ? ' (retained)' : ' (removed)'}`);
     console.log(`  transcript=${path.relative(repoRoot, manifest.transcript.path)} events=${manifest.transcript.events} toolCalls=${manifest.transcript.toolCalls}`);
     console.log(`  calls=${path.relative(repoRoot, manifest.calls.path)} total=${manifest.calls.total} rejected=${manifest.calls.rejected} outOfBounds=${manifest.calls.outOfBounds}`);
     console.log(`  created=${manifest.created.length} 条${manifest.created.length ? '：' + manifest.created.map((e) => e.id).join('、') : ''}`);
+    console.log(`  state=${path.relative(repoRoot, manifest.state.path)}（${manifest.state.count} 条）`);
+    for (const result of manifest.assertion.results.filter((r) => !r.ok)) {
+      console.error(`    断言未通过 ${result.name}：期望 ${formatValue(result.expected)}，实际 ${formatValue(result.actual)}`);
+    }
     reportCleanup(cleanup, run);
     console.log(`  caller marker=${manifest.callerMarker}`);
     console.log(`  run dir=${path.relative(repoRoot, runDir)}`);
-    if (!sessionCompleted) console.log(`  session exit=${session.exitCode} timedOut=${session.timedOut}`);
+    if (!completed) console.log(`  session exit=${session.exitCode} timedOut=${session.timedOut}`);
   }
 
   if (failures > 0) process.exitCode = 1;

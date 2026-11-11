@@ -165,3 +165,13 @@ test('摘要给人读：一段话说完这次测了什么、跑了多少、建�
   assert.match(summary, /14/);
   assert.match(summary, /1 条/);
 });
+
+test('报告带判定小节，断言失败时报告里就能读到失败项', () => {
+  const report = renderReport({
+    ...MANIFEST,
+    assertion: { status: 'failed', results: [{ ok: false, name: '父任务正文非空', expected: '非空', actual: '（空）' }] },
+  });
+  assert.match(report, /## 判定/);
+  assert.match(report, /结局断言 未通过/);
+  assert.match(report, /父任务正文非空/);
+});

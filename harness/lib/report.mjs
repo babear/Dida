@@ -29,9 +29,51 @@ function cost(costUsd) {
   return typeof costUsd === 'number' ? costUsd.toFixed(4) : '?';
 }
 
+// 期望值与实际值可能是对象（`{kind: 'TEXT'}`），直接拼进字符串会变成 [object Object]，
+// 而这条报告的全部意义就是让人一眼看出差在哪。控制台输出也走这一个，两处口径一致。
+export function formatValue(value) {
+  if (value === undefined) return '（未给出）';
+  if (value === '') return '（空）';
+  return typeof value === 'string' ? value : JSON.stringify(value);
+}
+
+export function renderAssertions(results) {
+  const failed = results.filter((result) => !result.ok);
+  if (failed.length === 0) return '（全部通过）';
+  return failed
+    .map((result) => `- ${result.name}：期望 ${formatValue(result.expected)}，实际 ${formatValue(result.actual)}`)
+    .join('\n');
+}
+
+export function renderVerdict({ assertion, session }) {
+  const lines = ['## 判定', ''];
+  if (assertion?.status === 'missing') {
+    lines.push('**用例配置错误：缺断言**', '');
+    lines.push('`scenarios/<id>/` 里没有 `assert.mjs`，本次没有开会话。补上断言，或把用例移到 `probes/`。');
+    return lines.join('\n');
+  }
+  if (session?.exitCode !== 0 || session?.timedOut) {
+    return '## 判定\n\n会话未正常结束，不评断言（见「会话」小节的退出码）。';
+  }
+  if (assertion?.status === 'failed') {
+    lines.push('**结局断言 未通过**', '', renderAssertions(assertion.results ?? []));
+    return lines.join('\n');
+  }
+  lines.push('结局断言 通过');
+  return lines.join('\n');
+}
+
 export function renderReport(manifest) {
   const created = manifest.created ?? [];
   const cleanup = manifest.cleanup ?? { deleted: [], failed: [], remaining: [], mismatched: [] };
+  // 缺断言根本没开会话，报告里只剩判定：写会话、模型、清场会让读者以为跑过。
+  if (manifest.assertion?.status === 'missing') {
+    return [
+      `# ${manifest.scenario} · ${manifest.run}`,
+      '',
+      renderVerdict({ assertion: manifest.assertion, session: {} }),
+    ].join('\n');
+  }
   // 首行就是三个事实，人打开报告第一眼就能回答"测的是哪份 skill、哪个模型、沙箱在哪"。
   const lines = [
     renderHeader(manifest),
@@ -40,6 +82,8 @@ export function renderReport(manifest) {
     '## 本次创建的任务',
     '',
     created.length === 0 ? '（没有创建任何任务）' : taskTable(created),
+    '',
+    renderVerdict({ assertion: manifest.assertion, session: manifest.session }),
     '',
     '## 清场',
     '',

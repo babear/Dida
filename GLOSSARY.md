@@ -85,7 +85,7 @@ _Avoid_: 初始化、fixture、setup
 _Avoid_: 试验、试跑、probe 模式
 
 **终态快照**:
-`runs/<runId>/state.json`，账本里每个 id 按 `task get --json` 取回的任务现状，取不到的记 `null`。结局断言读它，事后断言逻辑改了也用它重放。
+`runs/<runId>/state.json`，账本里每个 id 按 `task get --json` 取回的任务现状，取不到的记 `null`。结局断言读它，事后断言逻辑改了也用它重放。在**清场之前**取——清场删的正是这些任务。
 _Avoid_: 状态文件、快照
 
 **复现价**:

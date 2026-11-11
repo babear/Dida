@@ -2,7 +2,7 @@
 
 被测 skill 的测试用例数据。机器在 `harness/`，这里只有数据。
 
-> **这份文档描述的是已定的规范，不是当前的实现。** 现在只有 `scenario.json` 与 `materials/` 能跑：放进去的 `preset.mjs`/`assert.mjs` 既不会被执行、「缺 `assert.mjs` 报错」也还没接上，两者都等各自的实现。`assert.mjs` 归 #7，`preset.mjs` 归 #19，探针与终态快照归 #20，三面判定归 #7/#8。
+> **这份文档里 `assert.mjs` 与 `state.json` 已经实现，`preset.mjs` 与探针还没有。** 现在 `scenario.json`、`materials/`、`assert.mjs` 都能跑：缺 `assert.mjs` 的用例会被判「用例配置错误」并直接退出、不开会话。`preset.mjs` 归 #19，探针（`probes/` 目录）与 `--scenario` 跑探针归 #20，过程断言归 #8。
 
 ```
 skill-tests/
@@ -73,7 +73,7 @@ export default (projects) => [
 ### 3. 跑探针
 
 ```bash
-node harness/run.mjs --scenario <id>   # #20 落地前，对 probes/ 会报 scenario not found
+node harness/run.mjs --scenario <id>   # #20 落地前，探针还只能放在 scenarios/ 里跑
 ```
 
 读完 `runs/<runId>/` 下的三件事实：
@@ -100,6 +100,8 @@ export default function assert({ tasks, created, calls, session }) {
 
 - 返回数组，空数组即通过。一次跑出所有失败项，不用修一条跑一条。
 - 每项 `{ok, name, expected, actual}`：`expected` 与 `actual` 会原样进报告，人不用翻日志就知道差在哪。
+- 断言抛异常或返回非数组时，harness 会把它折成一条失败结果，不会中断整次运行。
+- **断言自己也要有测试**：放一份 `assert.test.mjs` 在同一个目录，用构造数据验证它对正确结局全绿、对错误结局点到具体那一条。它不烧 API，`npm run test:scenarios` 跑它。
 - **按字段定位任务**，不按顺序猜。别写 `tasks[0]`——你不知道 agent 建了几条、以什么顺序建。
 - `created` 条目带 `origin: 'preset' | 'agent'`，要区分来源时用它。
 - `tasks` 里取不到的任务是 `null`（账本有 id 但任务被删了），断言要能处理。
@@ -116,12 +118,10 @@ git mv skill-tests/probes/<id> skill-tests/scenarios/<id>
 ### 6. 验证红绿
 
 ```bash
-node harness/run.mjs --scenario <id>   # 当前 skill 上必须红
+node harness/run.mjs --scenario <id>   # 当前 skill 上必须红（退出码 1）
 ```
 
-红不了说明这条 scenario 复现不了缺陷，是假测试——回第 1 步重写原话。改过 skill 之后再跑一次，必须绿。这就是「复现价」。
-
-> **这一步在 #7/#8 落地前做不到。** 当前判定只看会话是否正常退出，不看断言——所以不管断言写没写对，跑出来都是 `COMPLETED`。三面判定接上之前，「必须红」只对会话本身成立（崩溃、超时），不对话义成立。
+红不了说明这条 scenario 复现不了缺陷，是假测试——回第 1 步重写原话。改过 skill 之后再跑一次，必须绿（退出码 0）。这就是「复现价」。
 
 ## 常见的坑
 

@@ -82,6 +82,12 @@ test('scenario.json 的其它键不进 prompt', (t) => {
   assert.equal(Object.hasOwn(loaded, 'expected'), false);
 });
 
+test('loadScenario 给出用例目录本身，供调用方查 assert.mjs 在不在', (t) => {
+  const root = tmpRepo(t);
+  const dir = writeScenario(root, 's1', { prompt: 'x' });
+  assert.equal(loadScenario(root, 's1').dir, dir);
+});
+
 test('materials 源目录里的子目录结构原样交给沙箱复制', (t) => {
   const root = tmpRepo(t);
   const dir = writeScenario(root, 's1', { prompt: 'x' });
