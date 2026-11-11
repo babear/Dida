@@ -63,3 +63,21 @@ test('断言返回的不是数组时同样判失败并说明原因', async () =>
   assert.equal(results[0].ok, false);
   assert.match(results[0].name, /数组/);
 });
+
+test('数组里混了 null / undefined 时归一成失败项，不让上层 every 抛异常', async () => {
+  const results = await runAssert(() => [null, undefined, { ok: true, name: '正常' }], INPUT);
+  assert.equal(results.length, 3);
+  assert.equal(results[0].ok, false);
+  assert.match(results[0].name, /第 1 项/);
+  assert.equal(results[1].ok, false);
+  assert.match(results[1].name, /第 2 项/);
+  assert.equal(results[2].ok, true);
+  // 归一化之后 every 能正常求值——这是崩溃的实际触发点
+  assert.equal(results.every((result) => result.ok), false);
+});
+
+test('元素缺布尔 ok 时也算形状不对', async () => {
+  const results = await runAssert(() => [{ ok: 'yes', name: 'x' }], INPUT);
+  assert.equal(results[0].ok, false);
+  assert.match(results[0].name, /形状不对/);
+});

@@ -139,7 +139,7 @@ async function runOne(options, scenario, projects, assertionFn) {
 
   // 终态快照在清场之前取：清场删的正是这些任务，删完再取只能拿到 null。
   // 快照落盘供重放（用户故事 43）：断言改了之后不必再烧一次 API。
-  const state = buildState({ dida: realDida(), created });
+  const state = buildState({ dida: realDida(), created, projects });
   const statePath = path.join(runDir, 'state.json');
   fs.writeFileSync(statePath, JSON.stringify(state, null, 2));
 
@@ -154,8 +154,16 @@ async function runOne(options, scenario, projects, assertionFn) {
   // 会话没正常结束时终态不可归因，断言不评。缺断言已经在 main 里挡掉，走不到这里。
   let assertion = { status: 'skipped', results: [] };
   if (completed) {
-    const results = await runAssert(assertionFn, { tasks: state, created, calls, session: sessionInfo });
-    assertion = { status: results.every((result) => result.ok) ? 'passed' : 'failed', results };
+    try {
+      const results = await runAssert(assertionFn, { tasks: state, created, calls, session: sessionInfo });
+      assertion = { status: results.every((result) => result.ok) ? 'passed' : 'failed', results };
+    } catch (error) {
+      // 断言阶段再出意外也不能让这次运行失去报告与清场：任务已经建进真实清单了。
+      assertion = {
+        status: 'failed',
+        results: [{ ok: false, name: '断言阶段异常', expected: '正常完成', actual: error.message }],
+      };
+    }
   }
 
   const manifest = {
