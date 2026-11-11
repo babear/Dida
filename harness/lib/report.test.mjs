@@ -5,7 +5,7 @@ import { renderHeader, renderReport, renderSummary } from './report.mjs';
 
 const MANIFEST = {
   run: '2026-11-07T09-00-00-000Z-ab12cd',
-  scenario: 'example-scenario',
+  scenario: 's1-plan-to-task',
   sandbox: 'C:\\Users\\Charles\\AppData\\Local\\Temp\\run-2026-11-07T09-00-00-000Z-ab12cd',
   skill: {
     source: 'E:\\repo\\skills\\dida-cli',
@@ -161,7 +161,7 @@ test('没有写命令被拒时不写这一行', () => {
 
 test('摘要给人读：一段话说完这次测了什么、跑了多少、建了什么', () => {
   const summary = renderSummary(MANIFEST);
-  assert.match(summary, /example-scenario/);
+  assert.match(summary, /s1-plan-to-task/);
   assert.match(summary, /14/);
   assert.match(summary, /1 条/);
 });

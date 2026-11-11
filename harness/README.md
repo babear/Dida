@@ -9,7 +9,7 @@ node harness/run.mjs --scenario <id>
 npm run test:harness  # harness 自己的单元测试，不烧 API
 ```
 
-`npm run test:harness` 跑与被测文件同目录的 `*.test.mjs`。跑 scenario 本身要真实 API 会话，别名归 #9。
+`npm run test:harness` 跑与被测文件同目录的 `*.test.mjs`。`npm run test:scenarios` 跑 `skill-tests/` 下的用例自检（断言的构造数据测试，不烧 API）。跑 scenario 本身要真实 API 会话，别名归 #9。
 
 | 参数 | 默认 | 作用 |
 |---|---|---|

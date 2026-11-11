@@ -101,7 +101,7 @@ export default function assert({ tasks, created, calls, session }) {
 - 返回数组，空数组即通过。一次跑出所有失败项，不用修一条跑一条。
 - 每项 `{ok, name, expected, actual}`：`expected` 与 `actual` 会原样进报告，人不用翻日志就知道差在哪。
 - 断言抛异常或返回非数组时，harness 会把它折成一条失败结果，不会中断整次运行。
-- **断言自己也要有测试**：放一份 `assert.test.mjs` 在同一个目录，用构造数据验证它对正确结局全绿、对错误结局点到具体那一条。它不烧 API。
+- **断言自己也要有测试**：放一份 `assert.test.mjs` 在同一个目录，用构造数据验证它对正确结局全绿、对错误结局点到具体那一条。它不烧 API，`npm run test:scenarios` 跑它。
 - **按字段定位任务**，不按顺序猜。别写 `tasks[0]`——你不知道 agent 建了几条、以什么顺序建。
 - `created` 条目带 `origin: 'preset' | 'agent'`，要区分来源时用它。
 - `tasks` 里取不到的任务是 `null`（账本有 id 但任务被删了），断言要能处理。
