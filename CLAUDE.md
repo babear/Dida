@@ -16,6 +16,6 @@ Single-context: one `GLOSSARY.md` and `docs/adr/` at the repo root. See `docs/ag
 
 ## Workflow
 
-When fixing review comments, follow `~/.claude/skills/implement/SKILL.md`, skipping the ticket-fetching step.
+When fixing review comments: fix every comment first, then invoke the `code-review` skill over that change (pass the commit the change started from as the fixed point).
 
 Write PR bodies with `/pr` — "push and open a PR", "open a PR", "write the PR description" all trigger it.
