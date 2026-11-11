@@ -17,10 +17,12 @@ skill-tests/
 |---|---|---|
 | `scenario.json` | `prompt`：用户原话，唯一给被测 agent 的文本输入 | 被测 agent |
 | `materials/` | 可选。用户原话里要引用的文件，整体复制进沙箱 | 被测 agent |
-| `preset.mjs` | 可选。导出 argv 数组，会话前由 harness 用真 CLI 执行 | 无 |
+| `preset.mjs` | 可选。声明要建的任务，会话前由 harness 用真 CLI 执行 | 无 |
 | `assert.mjs` | 结局断言。默认导出 `{tasks, created, calls, session} => 结果数组` | 无 |
 
 判定分三面、按顺序短路，见 `harness/README.md` 的「判定」与 ADR-0012。
+
+`scenarios/<id>/` 里没有 `assert.mjs` 时**按探针处理**：照常跑完、落产物，报告标「无断言，不判定」，不记为通过也不记为失败。这是有意为之——探针与"还没写断言"是同一件事。要让它参与判定，就把断言写上；要它彻底不干扰，就挪到 `probes/`。
 
 ## 写一条新 scenario 的流程
 
@@ -115,6 +117,8 @@ node harness/run.mjs --scenario <id>   # 当前 skill 上必须红
 ```
 
 红不了说明这条 scenario 复现不了缺陷，是假测试——回第 1 步重写原话。改过 skill 之后再跑一次，必须绿。这就是「复现价」。
+
+> **这一步在 #7/#8 落地前做不到。** 当前判定只看会话是否正常退出，不看断言——所以不管断言写没写对，跑出来都是 `COMPLETED`。三面判定接上之前，「必须红」只对会话本身成立（崩溃、超时），不对话义成立。
 
 ## 常见的坑
 

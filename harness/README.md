@@ -51,14 +51,14 @@ npm run test:harness  # harness 自己的单元测试，不烧 API
 |---|---|---|---|
 | `scenario.json` | `prompt`，唯一给 agent 的文本输入 | 是 | 已有 |
 | `materials/` | 可选，整体复制进沙箱 `materials/` | 是 | 已有 |
-| `preset.mjs` | 可选，导出 argv 数组，会话前用真 CLI 执行 | 否 | 未实现 |
+| `preset.mjs` | 可选，声明要建的任务，会话前由 harness 用真 CLI 执行 | 否 | 未实现 |
 | `assert.mjs` | 结局断言，默认导出 `{tasks, created, calls, session} => 结果数组` | 否 | #7 |
 
 加一条 scenario 就是加一个目录，harness 一行不用改（前提是 `assert.mjs` 与 `preset.mjs` 已实现）。目录形态与三面判定的完整理由见 ADR-0012。
 
 **只有 `scenario.json` 与 `materials/` 现在能跑。** `assert.mjs` 归 #7，`preset.mjs` 归 #19，探针与终态快照归 #20。在那之前，目录里放了它们也不会被执行。
 
-`preset.mjs` 建前置数据时只 import `harness/lib/projects.mjs` 的测试清单集合，写不出字面量 id；它建出的任务立刻记进本 run 的账本，和 shim 记的是同一份。
+`preset.mjs` 建前置数据时从 harness 拿到**本次 run 的清单**，不是仓库里的默认常量——用默认常量会在环境变量覆盖时建到清场的视野外，成为删不掉的孤儿。harness 加载时校验 argv 里所有 project id ∈ 本次清单集合，越界就拒绝该 run。它建出的任务立刻记进本 run 的账本，和 shim 记的是同一份。
 
 `assert.mjs` 返回 `{ok, name, expected, actual}[]`，空数组即通过。它按**字段**定位任务（`childIds.length === 5`、`kind === 'TEXT'`），不按顺序猜。`created` 条目带 `origin: 'preset' | 'agent'`。
 
