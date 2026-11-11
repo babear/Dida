@@ -10,3 +10,10 @@
 
 复现价的问题记在 [babear/Dida#7](https://github.com/babear/Dida/issues/7)。删掉它
 不代表问题解决——那条 issue 需要另找一条真能复现缺陷的 scenario。
+
+删除时一并收掉的四处（`report.test.mjs` 里的 `s1-plan-to-task` 只是夹具名，不用动）：
+
+- 本目录
+- `package.json` 的 `test:scenarios` 脚本
+- `harness/README.md` 第 12 行提到 `test:scenarios` 的那句
+- `skill-tests/README.md` 第 104 行末尾提到 `test:scenarios` 的那半句
