@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 export function scenariosDir(repoRoot) {
-  return path.join(repoRoot, 'scenarios');
+  return path.join(repoRoot, 'skill-tests', 'scenarios');
 }
 
 export function listScenarios(repoRoot) {

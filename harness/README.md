@@ -47,20 +47,24 @@ npm run test:harness  # harness 自己的单元测试，不烧 API
 
 `skill-tests/scenarios/<id>/` 一个目录就是一条 scenario：
 
-| 文件 | 作用 | 被测 agent 看得到 |
-|---|---|---|
-| `scenario.json` | `prompt`，唯一给 agent 的文本输入 | 是 |
-| `materials/` | 可选，整体复制进沙箱 `materials/` | 是 |
-| `preset.mjs` | 可选，导出 argv 数组，会话前用真 CLI 执行 | 否 |
-| `assert.mjs` | 结局断言，默认导出 `{tasks, created, calls, session} => 结果数组` | 否 |
+| 文件 | 作用 | 被测 agent 看得到 | 实现 |
+|---|---|---|---|
+| `scenario.json` | `prompt`，唯一给 agent 的文本输入 | 是 | 已有 |
+| `materials/` | 可选，整体复制进沙箱 `materials/` | 是 | 已有 |
+| `preset.mjs` | 可选，导出 argv 数组，会话前用真 CLI 执行 | 否 | #7 |
+| `assert.mjs` | 结局断言，默认导出 `{tasks, created, calls, session} => 结果数组` | 否 | #7 |
 
-加一条 scenario 就是加一个目录，harness 一行不用改。目录形态与三面判定的完整理由见 ADR-0012。
+加一条 scenario 就是加一个目录。目录形态与三面判定的完整理由见 ADR-0012。
+
+**只有 `scenario.json` 与 `materials/` 现在能跑。** `preset.mjs`、`assert.mjs` 与 `probes/` 是已定的规范，实现归 #7；在那之前，目录里放了它们也不会被执行。
 
 `preset.mjs` 建前置数据时只 import `harness/lib/projects.mjs` 的测试清单集合，写不出字面量 id；它建出的任务立刻记进本 run 的账本，和 shim 记的是同一份。
 
 `assert.mjs` 返回 `{ok, name, expected, actual}[]`，空数组即通过。它按**字段**定位任务（`childIds.length === 5`、`kind === 'TEXT'`），不按顺序猜。`created` 条目带 `origin: 'preset' | 'agent'`。
 
 没有 `assert.mjs` 的目录放在 `skill-tests/probes/<id>/` 下，是探针：跑一次拿事实样本，写断言，然后删掉。探针不参与全量判定。
+
+`listScenarios` 只扫 `skill-tests/scenarios/`，仓库根的旧 `scenarios/` 已不再读取。
 
 ## 判定
 
