@@ -6,7 +6,6 @@
     "node": ">=22"
   },
   "scripts": {
-    "test:harness": "node --test",
-    "test:scenarios": "node --test \"skill-tests/**/*.test.mjs\""
+    "test:harness": "node --test"
   }
 }
