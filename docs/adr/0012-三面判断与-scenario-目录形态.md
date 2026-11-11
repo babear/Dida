@@ -59,11 +59,13 @@ skill-tests/
 
 校验必须**复用 `guard.mjs` 的逐命令目标解析**（`decide(argv, allowedProjects)` 与 `WRITE_COMMANDS` 表），不能按字面扫 24 位十六进制串：`task complete <projectId> <taskId>` 两个参数同形，`task update` 的 taskId 也同形，扫字面会误拒合法 preset；只看 `--project` 又会漏掉位置参数目标（`task complete`/`delete`、`project update`、`task move --from/--to`）。
 
-复用时要补三个 `decide` 原本不为 preset 设计的口子，否则 preset 要么被误拒、要么静默空跑：
+复用 `decide` 覆盖不到三类情况，preset 要各自处理：
 
 - **无目标写命令**（`project create` 等，表里记成 `[]`）：`decide` 返回 `no-target` 拒绝。preset 是否需要建清单，实现时定；不需要就明确拒绝并说明不支持，需要就单独放行这类命令。
 - **`--help` / 裸命令组**：`decide` 放行且无目标。preset 里出现这类 argv 等于什么都没建，应当报错而不是静默通过。
-- **`--parent-id`**：它建的是真子任务，会修改父任务的 `childIds[]`，而父任务不在账本里、也可能是测试清单里用户手动建的任务。**默认拒绝**：preset 里出现 `--parent-id` 就拒绝该 run。等占位符方案（预设自己建的任务 id）落地后再放开——那时父任务必然在账本里，可以校验。
+- **指向任务的参数**：`decide` 只校验目标清单，不校验任务 id。`--parent-id` 建真子任务、会修改父任务的 `childIds[]`；`task update --id`、`task delete <projectId> <taskId>`、`task move --task`、`comment add` 同理。这些任务都不在账本里，指针写错就改到账本之外的数据。**preset 里出现这类参数就拒绝该 run**，等占位符方案（预设自己建的任务 id）落地后再放开——那时被指向的任务必然在账本里，可以校验。
+
+「出现」指**解析出的选项或位置参数**，不是字面匹配：`--title --parent-id` 里 `--parent-id` 只是 `--title` 的值，不算出现。判据复用 `guard.mjs` 的 `parseArgv`，与 shim 判定越界写入用的是同一层解析。
 
 import 一个常量数组**并不能**阻止同文件里写字符串字面量，所以「语法上不可能」这个论证不成立，校验必须真的发生在运行时。判据是 shim 用的同一份表，preset 与被测 agent 的写入走同一套越界定义。
 

@@ -58,7 +58,7 @@ npm run test:harness  # harness 自己的单元测试，不烧 API
 
 **只有 `scenario.json` 与 `materials/` 现在能跑。** `assert.mjs` 归 #7，`preset.mjs` 归 #19，探针与终态快照归 #20。在那之前，目录里放了它们也不会被执行。
 
-`preset.mjs` 建前置数据时从 harness 拿到**本次 run 的清单**，不是仓库里的默认常量——用默认常量会在环境变量覆盖时建到清场的视野外，成为删不掉的孤儿。harness 加载时复用 `guard.mjs` 的逐命令目标解析校验每条命令的目标 ∈ 本次清单集合，越界就拒绝该 run。它建出的任务立刻记进本 run 的账本，和 shim 记的是同一份。
+`preset.mjs` 建前置数据时从 harness 拿到**本次 run 的清单**，不是仓库里的默认常量——用默认常量会在环境变量覆盖时建到清场的视野外，成为删不掉的孤儿。校验规则见 ADR-0012：目标清单必须 ∈ 本次清单集合；指向已有任务的参数（`--parent-id`、`task update --id` 等）与 `--help` 这类空操作一律拒绝。它建出的任务立刻记进本 run 的账本，和 shim 记的是同一份。
 
 `assert.mjs` 返回 `{ok, name, expected, actual}[]`，空数组即通过。它按**字段**定位任务（`childIds.length === 5`、`kind === 'TEXT'`），不按顺序猜。`created` 条目带 `origin: 'preset' | 'agent'`。
 
