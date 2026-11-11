@@ -55,13 +55,17 @@ skill-tests/
 两条约束：
 
 1. **harness 把本次 run 的清单交给 preset**，不让它自己取。具体形态（函数参数还是别的）是实现细节，不在本 ADR 定。
-2. **harness 加载 preset 时校验 argv 里所有 project id ∈ 本次清单集合**，越界就拒绝执行该 run，不进入会话。这是信任边界——写错一个 id 就是往真实清单里写数据。
+2. **harness 加载 preset 时校验每条命令的目标 ∈ 本次清单集合**，越界就拒绝执行该 run，不进入会话。这是信任边界——写错一个 id 就是往真实清单里写数据。
 
-import 一个常量数组**并不能**阻止同文件里写字符串字面量，所以「语法上不可能」这个论证不成立，校验必须真的发生在运行时。
+校验必须**复用 `guard.mjs` 的逐命令目标解析**（`decide(argv, allowedProjects)` 与 `WRITE_COMMANDS` 表），不能按字面扫 24 位十六进制串：`task complete <projectId> <taskId>` 两个参数同形，`task update` 的 taskId 也同形，扫字面会误拒合法 preset；只看 `--project` 又会漏掉位置参数目标（`task complete`/`delete`、`project update`、`task move --from/--to`）。
+
+import 一个常量数组**并不能**阻止同文件里写字符串字面量，所以「语法上不可能」这个论证不成立，校验必须真的发生在运行时。判据是 shim 用的同一份表，preset 与被测 agent 的写入走同一套越界定义。
 
 ### 探针是没写断言的 scenario
 
 不另造 `--probe` 开关。探针跑完整链路，产出轨迹、调用日志与终态快照供人写断言，跑完删掉目录。`probes/` 与 `scenarios/` 分开，肉眼可见有没有残留。
+
+**`scenarios/<id>/` 缺 `assert.mjs` 时报错退出，不跑会话。** 两个目录的区分就是「有没有断言」：跳过会让漏写或误删断言的用例静默退出回归网，而退出码仍是 0。没写完的用例放 `probes/`，它本来就不参与判定。
 
 ## 后果
 
