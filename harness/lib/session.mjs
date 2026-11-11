@@ -87,7 +87,8 @@ export function sessionCompleted(session) {
   return session.exitCode === 0 && !session.timedOut;
 }
 
-export function runSession({ argv, cwd, env, transcriptPath }) {  return new Promise((resolve, reject) => {
+export function runSession({ argv, cwd, env, transcriptPath }) {
+  return new Promise((resolve, reject) => {
     const out = fs.createWriteStream(transcriptPath, { flags: 'w' });
     const errChunks = [];
     const child = spawn(resolveClaudeExe(), argv, {
