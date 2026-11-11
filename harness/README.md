@@ -62,7 +62,7 @@ npm run test:harness  # harness 自己的单元测试，不烧 API
 
 `assert.mjs` 返回 `{ok, name, expected, actual}[]`，空数组即通过。它按**字段**定位任务（`childIds.length === 5`、`kind === 'TEXT'`），不按顺序猜。`created` 条目带 `origin: 'preset' | 'agent'`。
 
-**`scenarios/<id>/` 缺 `assert.mjs` 时报错退出，不跑会话。** 跳过会让漏写或误删断言的用例静默退出回归网、退出码仍是 0。没写完的用例放 `probes/`。
+**`scenarios/<id>/` 缺 `assert.mjs` 时报错退出，不跑会话。** 跳过会让漏写或误删断言的用例静默退出回归网、退出码仍是 0。报告里单列「用例配置错误」，与「断言未通过」区分——一个去补用例，一个去改 skill。没写完的用例放 `probes/`。
 
 没有 `assert.mjs` 的目录放在 `skill-tests/probes/<id>/` 下，是探针：跑一次拿事实样本，写断言，然后删掉。探针不参与全量判定。
 

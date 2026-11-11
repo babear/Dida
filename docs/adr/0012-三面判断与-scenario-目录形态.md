@@ -63,20 +63,25 @@ skill-tests/
 
 - **无目标写命令**（`project create` 等，表里记成 `[]`）：`decide` 返回 `no-target` 拒绝。preset 是否需要建清单，实现时定；不需要就明确拒绝并说明不支持，需要就单独放行这类命令。
 - **`--help` / 裸命令组**：`decide` 放行且无目标。preset 里出现这类 argv 等于什么都没建，应当报错而不是静默通过。
-- **指向任务的参数**：`decide` 只校验目标清单，不校验任务 id。这些任务都不在账本里，指针写错就改到账本之外的数据。**preset 里出现下表任一任务指针就拒绝该 run**，等占位符方案（预设自己建的任务 id）落地后再放开——那时被指向的任务必然在账本里，可以校验。
+- **指向任务的参数**：`decide` 只校验目标清单，不校验任务 id。**preset 里出现下表任一任务指针就拒绝该 run**，等占位符方案（预设自己建的任务 id）落地后再放开。
 
 | 命令 | 任务指针 |
 |---|---|
 | `task create` | `--parent-id` |
-| `task update` | 位置参数 0 与 `--id`（两者必须相同才算合法写入，但都指向任务） |
+| `task update` | 位置参数 0、`--id`、`--parent-id` |
 | `task move` | `--task` |
 | `task complete` / `task delete` | 位置参数 1 |
-| `task comment add` / `task comment delete` | 位置参数 1（`comment delete` 的位置参数 2 是 commentId） |
+| `task comment add` / `task comment delete` | 位置参数 1 |
 | `task assign` / `task unassign` | `--task` |
 | `task complete-batch` | `--tasks`（逗号分隔） |
-| `project column update` | 位置参数 1 是 columnId，不是任务，不在本规则内 |
 
-这张表由 `WRITE_COMMANDS` 的每一行推出：凡是有清单目标、又有任务/子资源指针的命令都列进来。实现时按表逐条判定，不要按例子挑——本 ADR 的上一版只举了五个例子，实测漏了 `task complete`、`task comment delete`、`assign`/`unassign --task`、`complete-batch --tasks`，它们同样会完成、删除或改派账本之外的任务。
+**位置参数按 0 基计**（`argv` 里命令路径之后的第一个参数是 0）——与 `guard.mjs` 的 `positionalAt` 一致。`harness/README.md` 的越界表用 1 基（「位置参数 1」指 projectId），两者不是同一套计数，读的时候别混。
+
+这张表不能只从 `WRITE_COMMANDS` 推出：那张表只声明**清单**目标，`--parent-id`、`--tasks` 都不在其中（只在 `VALUE_FLAGS` 里）。任务指针要对着 CLI 的 `--help` 逐命令找，只按现有例子推会漏。
+
+`project column update` 的位置参数 1 是 columnId、`task comment delete` 的位置参数 2 是 commentId。它们不是任务指针，但同属账本之外的资源，处置相同——出现即拒绝。
+
+`task update` 的位置参数 0 与 `--id` 是同一个任务的两个写法，ADR-0011 要求两者相同才算合法写入；但在 preset 里**只要出现就拒绝**，不看是否相同、也不看该任务是否在本 run 账本里——当前没有「指向已有任务」的合法用法，等占位符方案落地再区分。
 
 「出现」指**解析出的选项或位置参数**，不是字面匹配：`--title --parent-id` 里 `--parent-id` 只是 `--title` 的值，不算出现。判据复用 `guard.mjs` 的 `parseArgv`，与 shim 判定越界写入用的是同一层解析。
 
@@ -90,7 +95,7 @@ import 一个常量数组**并不能**阻止同文件里写字符串字面量，
 
 **`scenarios/<id>/` 缺 `assert.mjs` 时报错退出，不跑会话。** 两个目录的区分就是「有没有断言」：跳过会让漏写或误删断言的用例静默退出回归网，而退出码仍是 0。没写完的用例放 `probes/`，它本来就不参与判定。
 
-「报错」指该 run 判失败（不是 `invalid`——这不是结果不可归因，是用例配置错了），中止这条 scenario，其余 scenario 照常跑。报告里要写明是「缺断言」，与「断言未通过」分开——两者的修法不同：一个去补用例，一个去改 skill。
+**这是三面之外的前置失败**：三面判定说的是会话跑完之后怎么判，缺断言是根本没开会话。它不取代三面表，也不是新的一面——报告里单列一类「用例配置错误」，与「可信度失败」「过程断言失败」「结局断言失败」并列。判 `fail` 而不是 `invalid`（不是结果不可归因），中止这条 scenario，其余照常跑。修法也不同：缺断言去补用例，断言未通过去改 skill。
 
 这条只挡「文件不存在」，挡不住 `export default () => []`（空数组即通过是合法契约）。真正的兜底是写用例时按实测行为写断言，见 `skill-tests/README.md` 的流程。
 
