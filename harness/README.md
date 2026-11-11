@@ -13,7 +13,7 @@ npm run test:harness  # harness 自己的单元测试，不烧 API
 
 | 参数 | 默认 | 作用 |
 |---|---|---|
-| `--scenario <id>` | 全部 | 只跑 `scenarios/<id>/` 这一条 |
+| `--scenario <id>` | 全部 | 只跑 `skill-tests/scenarios/<id>/` 这一条 |
 | `--skill-path <dir>` | `skills/dida-cli` | 要复制进沙箱的 skill 目录 |
 | `--settings <file>` | `~/.claude/settings.json` | 取 `ANTHROPIC_*` 键的来源 |
 | `--keep-sandbox` | 关 | 成功时也保留沙箱（失败时总是保留） |
@@ -21,8 +21,6 @@ npm run test:harness  # harness 自己的单元测试，不烧 API
 | `--clean <runId>` | — | 只按该 run 的 `created.ndjson` 删除任务，然后退出 |
 
 退出码：任一会话非零退出或超时即 1；清场中止或删除失败也是 1。
-
-**当前判定口径**：只看会话是否正常退出（`COMPLETED` / `INCOMPLETE`）。结局断言与过程断言分别属于 #7 与 #8，接上之后才构成 scenario 的通过或失败。
 
 ### 清场纪律
 
@@ -47,9 +45,32 @@ npm run test:harness  # harness 自己的单元测试，不烧 API
 
 ## scenario
 
-`scenarios/<id>/scenario.json` 目前只有 `prompt` 一个字段，是被测 agent 能看到的唯一输入。同目录的 `materials/`（可选）会整体复制进沙箱的 `materials/`。
+`skill-tests/scenarios/<id>/` 一个目录就是一条 scenario：
 
-断言、期望行为与反馈原文都不进 scenario 目录——被测 agent 的工作目录就是沙箱，看不到仓库。
+| 文件 | 作用 | 被测 agent 看得到 |
+|---|---|---|
+| `scenario.json` | `prompt`，唯一给 agent 的文本输入 | 是 |
+| `materials/` | 可选，整体复制进沙箱 `materials/` | 是 |
+| `preset.mjs` | 可选，导出 argv 数组，会话前用真 CLI 执行 | 否 |
+| `assert.mjs` | 结局断言，默认导出 `{tasks, created, calls, session} => 结果数组` | 否 |
+
+加一条 scenario 就是加一个目录，harness 一行不用改。目录形态与三面判定的完整理由见 ADR-0012。
+
+`preset.mjs` 建前置数据时只 import `harness/lib/projects.mjs` 的测试清单集合，写不出字面量 id；它建出的任务立刻记进本 run 的账本，和 shim 记的是同一份。
+
+`assert.mjs` 返回 `{ok, name, expected, actual}[]`，空数组即通过。它按**字段**定位任务（`childIds.length === 5`、`kind === 'TEXT'`），不按顺序猜。`created` 条目带 `origin: 'preset' | 'agent'`。
+
+没有 `assert.mjs` 的目录放在 `skill-tests/probes/<id>/` 下，是探针：跑一次拿事实样本，写断言，然后删掉。探针不参与全量判定。
+
+## 判定
+
+三面按顺序短路，任一面红即非零，报告写明是哪一面：
+
+1. **可信度检查**：调用日志条数少于轨迹里的命令调用数，说明有调用绕过 shim。失败标 `invalid` 而非 `fail`——退出码同样非零，但语义是"重跑"。见 ADR-0012。
+2. **过程断言**：调用日志 argv 序列上的三条硬规则，见 ADR-0005。第 3 条（越界写入）现由 shim 当场拒绝并记 `rejected`，只需接进判定。
+3. **结局断言**：读终态快照 `runs/<runId>/state.json`——账本里每个 id 按 `task get --json` 取回的任务现状，取不到的记 `null`。
+
+**当前判定口径**：只看会话是否正常退出（`COMPLETED` / `INCOMPLETE`）。三面判定接上之后才构成 scenario 的通过或失败。
 
 ## 沙箱
 
