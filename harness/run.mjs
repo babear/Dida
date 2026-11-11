@@ -139,8 +139,17 @@ async function runOne(options, scenario, projects, assertionFn) {
 
   // 终态快照在清场之前取：清场删的正是这些任务，删完再取只能拿到 null。
   // 快照落盘供重放（用户故事 43）：断言改了之后不必再烧一次 API。
-  const state = buildState({ dida: realDida(), created, projects });
+  // 取快照要枚举清单一，那一步失败不能带走整次运行——下面的 manifest 与清场
+  // 必须照常执行，否则任务建在真实清单里却没人删。
   const statePath = path.join(runDir, 'state.json');
+  let state;
+  let stateError = null;
+  try {
+    state = buildState({ dida: realDida(), created, projects });
+  } catch (error) {
+    state = [];
+    stateError = error.message;
+  }
   fs.writeFileSync(statePath, JSON.stringify(state, null, 2));
 
   const sessionInfo = {
@@ -152,8 +161,15 @@ async function runOne(options, scenario, projects, assertionFn) {
   const completed = sessionCompleted(session);
 
   // 会话没正常结束时终态不可归因，断言不评。缺断言已经在 main 里挡掉，走不到这里。
+  // 快照没取到同理：拿基础设施故障去判 skill 缺陷是错的，标 broken 让人重跑。
   let assertion = { status: 'skipped', results: [] };
-  if (completed) {
+  if (completed && stateError) {
+    assertion = {
+      status: 'broken',
+      detail: `取终态快照失败：${stateError}`,
+      results: [{ ok: false, name: '终态快照不可用', expected: '能列出测试清单', actual: stateError }],
+    };
+  } else if (completed) {
     try {
       const results = await runAssert(assertionFn, { tasks: state, created, calls, session: sessionInfo });
       assertion = { status: results.every((result) => result.ok) ? 'passed' : 'failed', results };
@@ -344,11 +360,13 @@ async function main() {
     // 清场失败只记 log 不中断：每条 scenario 的账本按 runId 隔离，删不掉自己的那几条
     // 不会影响下一条的判断。退出码仍非零，让人知道有现场要收。
     const cleanupProblem = hasCleanupProblem(cleanup);
-    if (!completed || cleanupProblem || manifest.assertion.status === 'failed') failures += 1;
+    // broken（快照取不到）同样算失败：结果不可归因，不能让它安静地算通过。
+    if (!completed || cleanupProblem || ['failed', 'broken'].includes(manifest.assertion.status)) failures += 1;
 
     const verdict = manifest.assertion.status === 'passed' ? 'PASSED'
       : manifest.assertion.status === 'skipped' ? 'INCOMPLETE'
-        : 'FAILED';
+        : manifest.assertion.status === 'broken' ? 'INVALID'
+          : 'FAILED';
     console.log(`${verdict} ${id}  run=${run}`);
     console.log(`  skill sha256=${manifest.skill.sha256.slice(0, 16)} files=${manifest.skill.files} git=${manifest.skill.git.rev?.slice(0, 12)}${manifest.skill.git.dirty ? ' (dirty)' : ''}`);
     console.log(`  model alias=${manifest.model.requested_alias} provider=${manifest.model.provider}（别名不等于实际执行模型，真实映射见 manifest.model.alias_mapping）`);

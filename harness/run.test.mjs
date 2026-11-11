@@ -71,7 +71,7 @@ test('断言模块加载失败同样落报告，与缺断言分开写', (t) => {
   });
 
   const report = fs.readFileSync(path.join(runDir, 'report.md'), 'utf8');
-  assert.match(report, /断言模块加载失败/);
+  assert.match(report, /结果不可归因/);
   assert.match(report, /assert\.mjs 没有默认导出的函数/);
   assert.doesNotMatch(report, /缺断言/);
 });

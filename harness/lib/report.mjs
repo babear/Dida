@@ -54,8 +54,12 @@ export function renderVerdict({ assertion, session }) {
     return lines.join('\n');
   }
   if (assertion?.status === 'broken') {
-    lines.push('**用例配置错误：断言模块加载失败**', '');
-    lines.push(`本次没有开会话。${assertion.detail ?? '原因是断言模块没能加载。'}`);
+    // 会话没跑起来（断言模块坏）与跑完了但快照取不到，都算「重跑」，不是 skill 缺陷。
+    lines.push('**本次结果不可归因，需重跑**', '');
+    lines.push(assertion.detail ?? '断言阶段没能开始。');
+    if (assertion.results?.length) {
+      lines.push('', renderAssertions(assertion.results));
+    }
     return lines.join('\n');
   }
   if (!sessionCompleted(session ?? {})) {
