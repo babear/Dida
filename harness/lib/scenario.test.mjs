@@ -82,11 +82,12 @@ test('scenario.json 的其它键不进 prompt', (t) => {
   assert.equal(Object.hasOwn(loaded, 'expected'), false);
 });
 
-test('materials 整体复制时保留子目录结构', (t) => {
+test('materials 源目录里的子目录结构原样交给沙箱复制', (t) => {
   const root = tmpRepo(t);
   const dir = writeScenario(root, 's1', { prompt: 'x' });
   fs.mkdirSync(path.join(dir, 'materials', 'nested'), { recursive: true });
   fs.writeFileSync(path.join(dir, 'materials', 'nested', 'deep.md'), 'deep');
   const loaded = loadScenario(root, 's1');
+  assert.equal(loaded.materialsDir, path.join(dir, 'materials'));
   assert.ok(fs.existsSync(path.join(loaded.materialsDir, 'nested', 'deep.md')));
 });

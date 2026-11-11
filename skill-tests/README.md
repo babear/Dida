@@ -2,7 +2,7 @@
 
 被测 skill 的测试用例数据。机器在 `harness/`，这里只有数据。
 
-> **这份文档描述的是已定的规范，不是当前的实现。** 现在只有 `scenario.json` 与 `materials/` 能跑；`preset.mjs`、`assert.mjs`、`probes/` 与三面判定都还没实现。`assert.mjs` 归 #7，其余尚无 ticket 承接。按本文件写出来的 `preset.mjs`/`assert.mjs` 在被实现之前不会被执行。
+> **这份文档描述的是已定的规范，不是当前的实现。** 现在只有 `scenario.json` 与 `materials/` 能跑。`assert.mjs` 归 #7，`preset.mjs` 归 #19，探针与终态快照归 #20，三面判定归 #7/#8。在被实现之前，按本文件写的 `preset.mjs`/`assert.mjs` 不会被执行。
 
 ```
 skill-tests/
@@ -52,23 +52,23 @@ skill-tests/probes/<id>/
 `preset.mjs` 只**声明**要跑哪些命令，不自己执行：
 
 ```js
-import { TEST_PROJECTS } from '../../harness/lib/projects.mjs';
-
-export default [
-  ['task', 'create', '--project', TEST_PROJECTS[0], '--title', '买气罐', '--content', '户外用'],
+export default (projects) => [
+  ['task', 'create', '--project', projects[0], '--title', '买气罐', '--content', '户外用'],
 ];
 ```
 
-- 只能 import 清单集合，**写不出字面量 id**。写错清单在语法上就不可能。
+- **清单从参数拿，不要 import 默认常量。** 本次 run 的清单可能被环境变量覆盖，用默认常量会建到清场的视野外，成为删不掉的孤儿。harness 加载时会校验 argv 里所有 project id ∈ 本次清单集合，越界就拒绝该 run。
 - 它建的任务和被测 agent 建的一样进本 run 的账本，清场管得到。
 - 只造数据结构，不造语义提示。preset 建的东西被测 agent 看得到，标题写得像答案等于给提示。
+
+> 具体的导出形态（函数参数、注入方式）由 #19 定。现在 preset 尚未实现。
 
 **不要做链式 scenario**（一条建、另一条查）。账本按 runId 隔离，后半条既断言不了也清不掉前半条的数据；单跑一条也必然缺前置数据。需要前置数据就用 preset。
 
 ### 3. 跑探针
 
 ```bash
-node harness/run.mjs --scenario <id>
+node harness/run.mjs --scenario <id>   # #20 落地前，对 probes/ 会报 scenario not found
 ```
 
 读完 `runs/<runId>/` 下的三件事实：
@@ -83,7 +83,7 @@ node harness/run.mjs --scenario <id>
 
 ```js
 export default function assert({ tasks, created, calls, session }) {
-  const parents = tasks.filter((t) => t.kind === 'TEXT' && t.childIds?.length === 5);
+  const parents = tasks.filter((t) => t?.kind === 'TEXT' && t.childIds?.length === 5);
   return [
     { ok: parents.length === 1, name: '恰好一个父任务带 5 条子任务',
       expected: 1, actual: parents.length },

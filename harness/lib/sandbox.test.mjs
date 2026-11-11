@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { renderGuardConfig, writeShim } from './sandbox.mjs';
+import { createSandbox, renderGuardConfig, writeShim } from './sandbox.mjs';
 
 const PROJECTS = ['69abc459ebbdbd00000009f0', '59f736cae4b060e424059e3b'];
 
@@ -70,4 +70,83 @@ test('writeShim 缺集合时当场报错，不留下半成品配置', (t) => {
 
   assert.throws(() => writeShim(path.join(dir, 'bin'), realCmd, undefined), /需要 testProjects/);
   assert.equal(fs.existsSync(path.join(dir, 'bin', 'lib', 'guard-config.mjs')), false);
+});
+
+// createSandbox 此前零测试；materials 的复制路径（cpSync recursive）在别处也没被覆盖到。
+test('createSandbox 把 materials 连子目录一起复制进沙箱', (t) => {
+  const dir = sandboxDir(t);
+  const realCmd = path.join(dir, 'dida.cmd');
+  fs.writeFileSync(realCmd, REAL_CMD);
+
+  const skillPath = path.join(dir, 'skill');
+  fs.mkdirSync(skillPath, { recursive: true });
+  fs.writeFileSync(path.join(skillPath, 'SKILL.md'), '# skill\n');
+
+  const settingsPath = path.join(dir, 'settings.json');
+  fs.writeFileSync(settingsPath, JSON.stringify({ env: { ANTHROPIC_BASE_URL: 'http://x' } }));
+
+  const agentsSourcePath = path.join(dir, 'agents.json');
+  fs.writeFileSync(agentsSourcePath, JSON.stringify({
+    'dida-scenario': { description: 'd', prompt: 'p', tools: ['Read'] },
+  }));
+
+  const materialsDir = path.join(dir, 'materials-src');
+  fs.mkdirSync(path.join(materialsDir, 'nested'), { recursive: true });
+  fs.writeFileSync(path.join(materialsDir, 'nested', 'deep.md'), 'deep');
+
+  const prevDidaCmd = process.env.DIDA_CMD;
+  process.env.DIDA_CMD = realCmd;
+  t.after(() => {
+    if (prevDidaCmd === undefined) delete process.env.DIDA_CMD;
+    else process.env.DIDA_CMD = prevDidaCmd;
+  });
+
+  const sandbox = createSandbox({
+    runId: `test-${Date.now()}`,
+    skillPath,
+    agentsSourcePath,
+    scenario: { prompt: 'x', materialsDir },
+    settingsPath,
+    testProjects: PROJECTS,
+  });
+  t.after(() => fs.rmSync(sandbox.root, { recursive: true, force: true }));
+
+  assert.equal(fs.readFileSync(path.join(sandbox.root, 'materials', 'nested', 'deep.md'), 'utf8'), 'deep');
+});
+
+test('createSandbox 没有 materials 时不建空目录', (t) => {
+  const dir = sandboxDir(t);
+  const realCmd = path.join(dir, 'dida.cmd');
+  fs.writeFileSync(realCmd, REAL_CMD);
+
+  const skillPath = path.join(dir, 'skill');
+  fs.mkdirSync(skillPath, { recursive: true });
+  fs.writeFileSync(path.join(skillPath, 'SKILL.md'), '# skill\n');
+
+  const settingsPath = path.join(dir, 'settings.json');
+  fs.writeFileSync(settingsPath, JSON.stringify({ env: {} }));
+
+  const agentsSourcePath = path.join(dir, 'agents.json');
+  fs.writeFileSync(agentsSourcePath, JSON.stringify({
+    'dida-scenario': { description: 'd', prompt: 'p', tools: ['Read'] },
+  }));
+
+  const prevDidaCmd = process.env.DIDA_CMD;
+  process.env.DIDA_CMD = realCmd;
+  t.after(() => {
+    if (prevDidaCmd === undefined) delete process.env.DIDA_CMD;
+    else process.env.DIDA_CMD = prevDidaCmd;
+  });
+
+  const sandbox = createSandbox({
+    runId: `test-${Date.now()}-nomaterials`,
+    skillPath,
+    agentsSourcePath,
+    scenario: { prompt: 'x', materialsDir: null },
+    settingsPath,
+    testProjects: PROJECTS,
+  });
+  t.after(() => fs.rmSync(sandbox.root, { recursive: true, force: true }));
+
+  assert.equal(fs.existsSync(path.join(sandbox.root, 'materials')), false);
 });
