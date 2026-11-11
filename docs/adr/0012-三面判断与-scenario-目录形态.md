@@ -63,7 +63,20 @@ skill-tests/
 
 - **无目标写命令**（`project create` 等，表里记成 `[]`）：`decide` 返回 `no-target` 拒绝。preset 是否需要建清单，实现时定；不需要就明确拒绝并说明不支持，需要就单独放行这类命令。
 - **`--help` / 裸命令组**：`decide` 放行且无目标。preset 里出现这类 argv 等于什么都没建，应当报错而不是静默通过。
-- **指向任务的参数**：`decide` 只校验目标清单，不校验任务 id。`--parent-id` 建真子任务、会修改父任务的 `childIds[]`；`task update --id`、`task delete <projectId> <taskId>`、`task move --task`、`comment add` 同理。这些任务都不在账本里，指针写错就改到账本之外的数据。**preset 里出现这类参数就拒绝该 run**，等占位符方案（预设自己建的任务 id）落地后再放开——那时被指向的任务必然在账本里，可以校验。
+- **指向任务的参数**：`decide` 只校验目标清单，不校验任务 id。这些任务都不在账本里，指针写错就改到账本之外的数据。**preset 里出现下表任一任务指针就拒绝该 run**，等占位符方案（预设自己建的任务 id）落地后再放开——那时被指向的任务必然在账本里，可以校验。
+
+| 命令 | 任务指针 |
+|---|---|
+| `task create` | `--parent-id` |
+| `task update` | 位置参数 0 与 `--id`（两者必须相同才算合法写入，但都指向任务） |
+| `task move` | `--task` |
+| `task complete` / `task delete` | 位置参数 1 |
+| `task comment add` / `task comment delete` | 位置参数 1（`comment delete` 的位置参数 2 是 commentId） |
+| `task assign` / `task unassign` | `--task` |
+| `task complete-batch` | `--tasks`（逗号分隔） |
+| `project column update` | 位置参数 1 是 columnId，不是任务，不在本规则内 |
+
+这张表由 `WRITE_COMMANDS` 的每一行推出：凡是有清单目标、又有任务/子资源指针的命令都列进来。实现时按表逐条判定，不要按例子挑——本 ADR 的上一版只举了五个例子，实测漏了 `task complete`、`task comment delete`、`assign`/`unassign --task`、`complete-batch --tasks`，它们同样会完成、删除或改派账本之外的任务。
 
 「出现」指**解析出的选项或位置参数**，不是字面匹配：`--title --parent-id` 里 `--parent-id` 只是 `--title` 的值，不算出现。判据复用 `guard.mjs` 的 `parseArgv`，与 shim 判定越界写入用的是同一层解析。
 
