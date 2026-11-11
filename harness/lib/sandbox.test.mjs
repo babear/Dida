@@ -98,8 +98,9 @@ function sandboxFixture(t) {
   });
 
   // createSandbox 用 %TEMP%/run-<runId>，加随机后缀免得撞上一次残留、cpSync 把旧文件合并进来。
+  // 清理由调用方在拿到 sandbox.root 之后注册，不在这里按 os.tmpdir() 重建路径——
+  // 那样会把 createSandbox 的路径方案复制进测试，日后改了只会静默泄漏。
   const runId = `test-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  t.after(() => fs.rmSync(path.join(os.tmpdir(), `run-${runId}`), { recursive: true, force: true }));
 
   return { dir, skillPath, agentsSourcePath, settingsPath, runId };
 }
@@ -119,6 +120,7 @@ test('createSandbox 把 materials 连子目录一起复制进沙箱', (t) => {
     settingsPath,
     testProjects: PROJECTS,
   });
+  t.after(() => fs.rmSync(sandbox.root, { recursive: true, force: true }));
 
   assert.equal(fs.readFileSync(path.join(sandbox.root, 'materials', 'nested', 'deep.md'), 'utf8'), 'deep');
 });
@@ -134,6 +136,7 @@ test('createSandbox 没有 materials 时不建空目录', (t) => {
     settingsPath,
     testProjects: PROJECTS,
   });
+  t.after(() => fs.rmSync(sandbox.root, { recursive: true, force: true }));
 
   assert.equal(fs.existsSync(path.join(sandbox.root, 'materials')), false);
 });

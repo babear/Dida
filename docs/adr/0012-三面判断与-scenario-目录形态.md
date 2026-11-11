@@ -48,7 +48,7 @@ skill-tests/
 
 ### 预设走真 CLI，与 shim 记同一份账本
 
-`preset.mjs` 声明要建的任务，在会话启动前由 harness 用真 CLI 执行，不经 shim（shim 是给被测 agent 用的）。建出的 id 立刻写进同一份 `created.ndjson`，于是自动清场与 `--clean` 都管得到。若另起一套记录，按 ADR-0010"只认账本"就永远清不掉——那是 ADR-0006 误删事故的反面。
+`preset.mjs` 声明要建的任务，在**建沙箱之前**由 harness 用真 CLI 执行，不经 shim（shim 是给被测 agent 用的）。预设不依赖沙箱：它只需要本次清单、`runId` 与账本路径。建出的 id 立刻写进同一份 `created.ndjson`，于是自动清场与 `--clean` 都管得到。若另起一套记录，按 ADR-0010"只认账本"就永远清不掉——那是 ADR-0006 误删事故的反面。
 
 `preset.mjs` 里的清单 id 必须是**本次 run 实际用的那一个**，不是仓库里的默认常量。本次清单由环境变量决定，`run.mjs` 用它建沙箱、也用它传给清场；preset 若写死默认常量，在环境变量覆盖时会建到清场的视野之外——账本里有、清场快照里没有，成为删不掉的孤儿。
 
@@ -59,13 +59,25 @@ skill-tests/
 
 校验必须**复用 `guard.mjs` 的逐命令目标解析**（`decide(argv, allowedProjects)` 与 `WRITE_COMMANDS` 表），不能按字面扫 24 位十六进制串：`task complete <projectId> <taskId>` 两个参数同形，`task update` 的 taskId 也同形，扫字面会误拒合法 preset；只看 `--project` 又会漏掉位置参数目标（`task complete`/`delete`、`project update`、`task move --from/--to`）。
 
+复用时要补三个 `decide` 原本不为 preset 设计的口子，否则 preset 要么被误拒、要么静默空跑：
+
+- **无目标写命令**（`project create` 等，表里记成 `[]`）：`decide` 返回 `no-target` 拒绝。preset 是否需要建清单，实现时定；不需要就明确拒绝并说明不支持，需要就单独放行这类命令。
+- **`--help` / 裸命令组**：`decide` 放行且无目标。preset 里出现这类 argv 等于什么都没建，应当报错而不是静默通过。
+- **`--parent-id`**：指向任务而非清单，不在 `WRITE_COMMANDS` 表里，不校验。
+
 import 一个常量数组**并不能**阻止同文件里写字符串字面量，所以「语法上不可能」这个论证不成立，校验必须真的发生在运行时。判据是 shim 用的同一份表，preset 与被测 agent 的写入走同一套越界定义。
 
 ### 探针是没写断言的 scenario
 
 不另造 `--probe` 开关。探针跑完整链路，产出轨迹、调用日志与终态快照供人写断言，跑完删掉目录。`probes/` 与 `scenarios/` 分开，肉眼可见有没有残留。
 
+`probes/<id>/` 里放了 `assert.mjs` 时不执行它，也不报错——探针的判据是目录位置，不是有没有断言文件。放错了就在「搬到 scenarios/」那一步纠正。
+
 **`scenarios/<id>/` 缺 `assert.mjs` 时报错退出，不跑会话。** 两个目录的区分就是「有没有断言」：跳过会让漏写或误删断言的用例静默退出回归网，而退出码仍是 0。没写完的用例放 `probes/`，它本来就不参与判定。
+
+「报错」指该 run 判失败（不是 `invalid`——这不是结果不可归因，是用例配置错了），中止这条 scenario，其余 scenario 照常跑。
+
+这条只挡「文件不存在」，挡不住 `export default () => []`（空数组即通过是合法契约）。真正的兜底是写用例时按实测行为写断言，见 `skill-tests/README.md` 的流程。
 
 ## 后果
 

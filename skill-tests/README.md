@@ -2,7 +2,7 @@
 
 被测 skill 的测试用例数据。机器在 `harness/`，这里只有数据。
 
-> **这份文档描述的是已定的规范，不是当前的实现。** 现在只有 `scenario.json` 与 `materials/` 能跑。`assert.mjs` 归 #7，`preset.mjs` 归 #19，探针与终态快照归 #20，三面判定归 #7/#8。在被实现之前，按本文件写的 `preset.mjs`/`assert.mjs` 不会被执行。
+> **这份文档描述的是已定的规范，不是当前的实现。** 现在只有 `scenario.json` 与 `materials/` 能跑：放进去的 `preset.mjs`/`assert.mjs` 既不会被执行、「缺 `assert.mjs` 报错」也还没接上，两者都等各自的实现。`assert.mjs` 归 #7，`preset.mjs` 归 #19，探针与终态快照归 #20，三面判定归 #7/#8。
 
 ```
 skill-tests/
