@@ -48,3 +48,10 @@ test('账本为空时不发任何命令', () => {
   assert.deepEqual(buildState({ dida, created: [] }), []);
   assert.deepEqual(dida.calls, []);
 });
+
+test('退出码非零但 stdout 是合法 JSON 时照样收下（真 CLI 错误路径会带 libuv 断言）', () => {
+  const dida = {
+    run: () => ({ stdout: JSON.stringify({ id: A, kind: 'TEXT' }), stderr: 'Assertion failed: …', exitCode: 1 }),
+  };
+  assert.deepEqual(buildState({ dida, created: [{ id: A, projectId: P1 }] }), [{ id: A, kind: 'TEXT' }]);
+});

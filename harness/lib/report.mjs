@@ -1,3 +1,5 @@
+import { sessionCompleted } from './session.mjs';
+
 // 首行只放前 12 位：够区分一次改动，又不至于长得没法读。
 function short(value) {
   return value ? value.slice(0, 12) : 'unknown';
@@ -38,9 +40,8 @@ export function formatValue(value) {
 }
 
 export function renderAssertions(results) {
-  const failed = results.filter((result) => !result.ok);
-  if (failed.length === 0) return '（全部通过）';
-  return failed
+  return results
+    .filter((result) => !result.ok)
     .map((result) => `- ${result.name}：期望 ${formatValue(result.expected)}，实际 ${formatValue(result.actual)}`)
     .join('\n');
 }
@@ -52,22 +53,34 @@ export function renderVerdict({ assertion, session }) {
     lines.push('`scenarios/<id>/` 里没有 `assert.mjs`，本次没有开会话。补上断言，或把用例移到 `probes/`。');
     return lines.join('\n');
   }
-  if (session?.exitCode !== 0 || session?.timedOut) {
+  if (assertion?.status === 'broken') {
+    lines.push('**用例配置错误：断言模块加载失败**', '');
+    lines.push(`本次没有开会话。${assertion.detail ?? '原因是断言模块没能加载。'}`);
+    return lines.join('\n');
+  }
+  if (!sessionCompleted(session ?? {})) {
     return '## 判定\n\n会话未正常结束，不评断言（见「会话」小节的退出码）。';
   }
   if (assertion?.status === 'failed') {
     lines.push('**结局断言 未通过**', '', renderAssertions(assertion.results ?? []));
     return lines.join('\n');
   }
-  lines.push('结局断言 通过');
+  // 只有明确的 passed 才写通过：旧 manifest（--clean 会重渲染）没有 assertion 字段，
+  // 落到这里写「通过」等于给一次没评过的运行发绿灯。
+  if (assertion?.status === 'passed') {
+    lines.push('结局断言 通过');
+    return lines.join('\n');
+  }
+  lines.push('未评断言（这份 manifest 没有断言结果，可能是旧版本运行）');
   return lines.join('\n');
 }
 
 export function renderReport(manifest) {
   const created = manifest.created ?? [];
   const cleanup = manifest.cleanup ?? { deleted: [], failed: [], remaining: [], mismatched: [] };
-  // 缺断言根本没开会话，报告里只剩判定：写会话、模型、清场会让读者以为跑过。
-  if (manifest.assertion?.status === 'missing') {
+  // 用例没跑起来（缺断言 / 断言模块坏了）时没有会话，报告里只剩判定：
+  // 写会话、模型、清场会让读者以为跑过。
+  if (manifest.assertion?.status === 'missing' || manifest.assertion?.status === 'broken') {
     return [
       `# ${manifest.scenario} · ${manifest.run}`,
       '',

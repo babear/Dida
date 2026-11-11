@@ -55,12 +55,13 @@ export function readCreated(file) {
   return entries;
 }
 
+// origin 目前恒为 'agent'：shim 只记被测 agent 的调用，预设（#19）走真 CLI 另写。
 export function recordCreated(file, { argv, stdout, exitCode = 0 }) {
   if (exitCode !== 0) return null;
   if (!isCreateCall(argv)) return null;
   const id = taskIdFromCreateOutput(stdout);
   if (!id) return null;
-  const entry = { id, projectId: flagValue(argv, '--project'), title: flagValue(argv, '--title') };
+  const entry = { id, projectId: flagValue(argv, '--project'), title: flagValue(argv, '--title'), origin: 'agent' };
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.appendFileSync(file, `${JSON.stringify(entry)}\n`);
   return id;

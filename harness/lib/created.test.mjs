@@ -19,8 +19,14 @@ test('task create 的结果把任务 id 记进账本', (t) => {
     stdout: '已创建: x\nID: 6aee00000000000000000001\n',
   });
   assert.deepEqual(readCreated(file), [
-    { id: '6aee00000000000000000001', projectId: 'p1', title: 'x' },
+    { id: '6aee00000000000000000001', projectId: 'p1', title: 'x', origin: 'agent' },
   ]);
+});
+
+test('账本条目带 origin，断言能区分预设与 agent 建的', (t) => {
+  const file = tmpFile(t);
+  recordCreated(file, { argv: ['task', 'create', '--project', 'p1'], stdout: 'ID: 6aee00000000000000000010\n' });
+  assert.equal(readCreated(file)[0].origin, 'agent');
 });
 
 test('每条记录单独一行，追加而不是重写整个文件', (t) => {

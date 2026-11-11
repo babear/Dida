@@ -17,9 +17,6 @@ export async function loadAssert(scenarioDir) {
 // 断言抛错或返回非数组都折成一条失败结果：一次运行要跑出所有失败项，
 // 不能因为断言自己写崩了就丢了整场景的结论。
 export async function runAssert(assertionFn, input) {
-  if (typeof assertionFn !== 'function') {
-    return [{ ok: false, name: '断言模块不可用', expected: '一个函数', actual: typeof assertionFn }];
-  }
   let results;
   try {
     results = await assertionFn(input);

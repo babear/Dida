@@ -63,9 +63,3 @@ test('断言返回的不是数组时同样判失败并说明原因', async () =>
   assert.equal(results[0].ok, false);
   assert.match(results[0].name, /数组/);
 });
-
-test('assertionFn 为 null（缺 assert.mjs）时判失败，而不是报 "not a function"', async () => {
-  const results = await runAssert(null, INPUT);
-  assert.equal(results[0].ok, false);
-  assert.match(results[0].name, /不可用/);
-});

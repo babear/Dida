@@ -14,6 +14,18 @@ test('断言全过时报告写「通过」，不点名任何断言', () => {
   assert.doesNotMatch(text, /父任务正文非空/);
 });
 
+test('旧 manifest（没有 assertion 字段）不写「通过」——它根本没评过', () => {
+  const text = renderVerdict({ assertion: undefined, session: SESSION_OK });
+  assert.doesNotMatch(text, /结局断言 通过/);
+  assert.match(text, /未评断言/);
+});
+
+test('status 是 skipped 时也不写「通过」', () => {
+  const text = renderVerdict({ assertion: { status: 'skipped', results: [] }, session: SESSION_OK });
+  assert.doesNotMatch(text, /结局断言 通过/);
+  assert.match(text, /未评断言/);
+});
+
 test('断言未通过时报告点名失败的那条，并同时写出期望值与实际值', () => {
   const text = renderVerdict({
     assertion: {

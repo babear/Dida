@@ -20,7 +20,7 @@ npm run test:harness  # harness 自己的单元测试，不烧 API
 | `--hold` | 关 | 跑完不清场，留现场给人看；之后用 `--clean <runId>` 收尾 |
 | `--clean <runId>` | — | 只按该 run 的 `created.ndjson` 删除任务，然后退出 |
 
-退出码：任一 scenario 断言未通过、会话非零退出或超时、缺 `assert.mjs`、清场中止或删除失败，都是 1。
+退出码：任一 scenario 断言未通过、会话非零退出或超时、用例配置错误（缺 `assert.mjs` 或断言模块加载失败）、清场中止或删除失败，都是 1。
 
 ### 清场纪律
 

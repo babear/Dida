@@ -98,8 +98,8 @@ function reportCleanup(cleanup, run) {
   }
 }
 
-async function runOne(options, id, projects, assertionFn) {
-  const scenario = loadScenario(repoRoot, id);
+async function runOne(options, scenario, projects, assertionFn) {
+  const id = scenario.id;
   const runKey = runId();
   const runsDir = ensureRunsDir(repoRoot);
   const runDir = path.join(runsDir, runKey);
@@ -205,9 +205,9 @@ function writeReport(runDir, manifest) {
   fs.writeFileSync(path.join(runDir, 'report.md'), `${renderReport(manifest)}\n`);
 }
 
-// 缺断言也要留下报告：AC 要求报告里能读到「缺断言」，而不只是 stderr 一行。
+// 用例配置错误也要留下报告：AC 要求报告里能读到原因，而不只是 stderr 一行。
 // 不建沙箱、不开会话，只落一份最小 manifest 与报告。
-export function writeMissingAssertRun(repoRoot, id, scenarioDir, skillPath) {
+export function writeUnusableRun(repoRoot, id, { skillPath, status, detail }) {
   const runKey = runId();
   const runDir = path.join(ensureRunsDir(repoRoot), runKey);
   fs.mkdirSync(runDir, { recursive: true });
@@ -215,14 +215,14 @@ export function writeMissingAssertRun(repoRoot, id, scenarioDir, skillPath) {
     run: runKey,
     scenario: id,
     skill: { source: skillPath },
-    assertion: { status: 'missing', results: [] },
+    assertion: { status, detail, results: [] },
     created: [],
     calls: {},
     session: {},
   };
   writeManifest(runDir, manifest);
   writeReport(runDir, manifest);
-  return { runKey, runDir, assertPath: path.join(scenarioDir, 'assert.mjs') };
+  return { runKey, runDir };
 }
 
 async function main() {
@@ -290,18 +290,28 @@ async function main() {
     try {
       assertionFn = await loadAssert(scenario.dir);
     } catch (error) {
-      console.error(`MISCONFIGURED ${id}  断言模块加载失败：${error.message}`);
+      const { runKey, runDir } = writeUnusableRun(repoRoot, id, {
+        skillPath: options.skillPath,
+        status: 'broken',
+        detail: error.message,
+      });
+      console.error(`MISCONFIGURED ${id}  断言模块加载失败：${error.message}（报告 ${path.relative(repoRoot, runDir)}，run=${runKey}）`);
       failures += 1;
       continue;
     }
     if (!assertionFn) {
-      const { runKey, runDir, assertPath } = writeMissingAssertRun(repoRoot, id, scenario.dir, options.skillPath);
+      const assertPath = path.join(scenario.dir, 'assert.mjs');
+      const { runKey, runDir } = writeUnusableRun(repoRoot, id, {
+        skillPath: options.skillPath,
+        status: 'missing',
+        detail: `缺 ${assertPath}`,
+      });
       console.error(`MISCONFIGURED ${id}  缺断言：${path.relative(repoRoot, assertPath)}（报告 ${path.relative(repoRoot, runDir)}，run=${runKey}）`);
       failures += 1;
       continue;
     }
 
-    const { run, runDir, sandbox, manifest, session, createdFile } = await runOne(options, id, projects, assertionFn);
+    const { run, runDir, sandbox, manifest, session, createdFile } = await runOne(options, scenario, projects, assertionFn);
     const completed = sessionCompleted(session);
 
     const retained = !completed || options.keepSandbox || options.hold;
@@ -328,9 +338,9 @@ async function main() {
     const cleanupProblem = hasCleanupProblem(cleanup);
     if (!completed || cleanupProblem || manifest.assertion.status === 'failed') failures += 1;
 
-    const verdict = manifest.assertion.status === 'skipped'
-      ? 'INCOMPLETE'
-      : manifest.assertion.status === 'passed' ? 'PASSED' : 'FAILED';
+    const verdict = manifest.assertion.status === 'passed' ? 'PASSED'
+      : manifest.assertion.status === 'skipped' ? 'INCOMPLETE'
+        : 'FAILED';
     console.log(`${verdict} ${id}  run=${run}`);
     console.log(`  skill sha256=${manifest.skill.sha256.slice(0, 16)} files=${manifest.skill.files} git=${manifest.skill.git.rev?.slice(0, 12)}${manifest.skill.git.dirty ? ' (dirty)' : ''}`);
     console.log(`  model alias=${manifest.model.requested_alias} provider=${manifest.model.provider}（别名不等于实际执行模型，真实映射见 manifest.model.alias_mapping）`);
