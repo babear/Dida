@@ -12,7 +12,7 @@ The five canonical triage roles map to same-named labels: `needs-triage`, `needs
 
 ### Domain docs
 
-Single-context: one `GLOSSARY.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+Single-context: one `GLOSSARY.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md` for how to read and use them. Before writing to either, read its rules: `~/.claude/skills/domain-modeling/GLOSSARY-FORMAT.md` and `ADR-FORMAT.md`.
 
 ## Workflow
 

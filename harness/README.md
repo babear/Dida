@@ -13,7 +13,7 @@ npm run test:harness  # harness 自己的单元测试，不烧 API
 
 | 参数 | 默认 | 作用 |
 |---|---|---|
-| `--scenario <id>` | 全部 | 只跑 `scenarios/<id>/` 这一条 |
+| `--scenario <id>` | 全部 | 只跑 `skill-tests/scenarios/<id>/` 这一条 |
 | `--skill-path <dir>` | `skills/dida-cli` | 要复制进沙箱的 skill 目录 |
 | `--settings <file>` | `~/.claude/settings.json` | 取 `ANTHROPIC_*` 键的来源 |
 | `--keep-sandbox` | 关 | 成功时也保留沙箱（失败时总是保留） |
@@ -21,8 +21,6 @@ npm run test:harness  # harness 自己的单元测试，不烧 API
 | `--clean <runId>` | — | 只按该 run 的 `created.ndjson` 删除任务，然后退出 |
 
 退出码：任一会话非零退出或超时即 1；清场中止或删除失败也是 1。
-
-**当前判定口径**：只看会话是否正常退出（`COMPLETED` / `INCOMPLETE`）。结局断言与过程断言分别属于 #7 与 #8，接上之后才构成 scenario 的通过或失败。
 
 ### 清场纪律
 
@@ -47,9 +45,38 @@ npm run test:harness  # harness 自己的单元测试，不烧 API
 
 ## scenario
 
-`scenarios/<id>/scenario.json` 目前只有 `prompt` 一个字段，是被测 agent 能看到的唯一输入。同目录的 `materials/`（可选）会整体复制进沙箱的 `materials/`。
+`skill-tests/scenarios/<id>/` 一个目录就是一条 scenario：
 
-断言、期望行为与反馈原文都不进 scenario 目录——被测 agent 的工作目录就是沙箱，看不到仓库。
+| 文件 | 作用 | 被测 agent 看得到 | 实现 |
+|---|---|---|---|
+| `scenario.json` | `prompt`，唯一给 agent 的文本输入 | 是 | 已有 |
+| `materials/` | 可选，整体复制进沙箱 `materials/` | 是 | 已有 |
+| `preset.mjs` | 可选，声明要建的任务，会话前由 harness 用真 CLI 执行 | 否 | 未实现 |
+| `assert.mjs` | 结局断言，默认导出 `{tasks, created, calls, session} => 结果数组` | 否 | #7 |
+
+加一条 scenario 就是加一个目录，harness 一行不用改（前提是 `assert.mjs` 与 `preset.mjs` 已实现）。目录形态与三面判定的完整理由见 ADR-0012。
+
+**只有 `scenario.json` 与 `materials/` 现在能跑。** `assert.mjs` 归 #7，`preset.mjs` 归 #19，探针与终态快照归 #20。在那之前，目录里放了它们也不会被执行。
+
+`preset.mjs` 建前置数据时从 harness 拿到**本次 run 的清单**，不是仓库里的默认常量——用默认常量会在环境变量覆盖时建到清场的视野外，成为删不掉的孤儿。校验规则见 ADR-0012：目标清单必须 ∈ 本次清单集合；指向已有任务的参数（`--parent-id`、`task update --id` 等）与 `--help` 这类空操作一律拒绝。它建出的任务立刻记进本 run 的账本，和 shim 记的是同一份。
+
+`assert.mjs` 返回 `{ok, name, expected, actual}[]`，空数组即通过。它按**字段**定位任务（`childIds.length === 5`、`kind === 'TEXT'`），不按顺序猜。`created` 条目带 `origin: 'preset' | 'agent'`。
+
+**`scenarios/<id>/` 缺 `assert.mjs` 时报错退出，不跑会话。** 跳过会让漏写或误删断言的用例静默退出回归网、退出码仍是 0。报告里单列「用例配置错误」，与「断言未通过」区分——一个去补用例，一个去改 skill。没写完的用例放 `probes/`。
+
+没有 `assert.mjs` 的目录放在 `skill-tests/probes/<id>/` 下，是探针：跑一次拿事实样本，写断言，然后删掉。探针不参与全量判定。
+
+`listScenarios` 只扫 `skill-tests/scenarios/`，仓库根的旧 `scenarios/` 已不再读取。
+
+## 判定
+
+三面按顺序短路，任一面红即非零，报告写明是哪一面：
+
+1. **可信度检查**：调用日志条数少于轨迹里的命令调用数，说明有调用绕过 shim。失败标 `invalid` 而非 `fail`——退出码同样非零，但语义是"重跑"。见 ADR-0012。
+2. **过程断言**：调用日志 argv 序列上的三条硬规则，见 ADR-0005。第 3 条（越界写入）现由 shim 当场拒绝并记 `rejected`，只需接进判定。
+3. **结局断言**：读终态快照 `runs/<runId>/state.json`——账本里每个 id 按 `task get --json` 取回的任务现状，取不到的记 `null`。
+
+**当前判定口径**：只看会话是否正常退出（`COMPLETED` / `INCOMPLETE`）。三面判定接上之后才构成 scenario 的通过或失败。
 
 ## 沙箱
 
