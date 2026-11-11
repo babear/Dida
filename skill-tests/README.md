@@ -2,6 +2,8 @@
 
 被测 skill 的测试用例数据。机器在 `harness/`，这里只有数据。
 
+> **这份文档描述的是已定的规范，不是当前的实现。** 现在只有 `scenario.json` 与 `materials/` 能跑；`preset.mjs`、`assert.mjs`、`probes/` 与三面判定都还没实现。`assert.mjs` 归 #7，其余尚无 ticket 承接。按本文件写出来的 `preset.mjs`/`assert.mjs` 在被实现之前不会被执行。
+
 ```
 skill-tests/
 ├── scenarios/<id>/     # 正式用例，参与全量判定

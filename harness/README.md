@@ -51,12 +51,12 @@ npm run test:harness  # harness 自己的单元测试，不烧 API
 |---|---|---|---|
 | `scenario.json` | `prompt`，唯一给 agent 的文本输入 | 是 | 已有 |
 | `materials/` | 可选，整体复制进沙箱 `materials/` | 是 | 已有 |
-| `preset.mjs` | 可选，导出 argv 数组，会话前用真 CLI 执行 | 否 | #7 |
+| `preset.mjs` | 可选，导出 argv 数组，会话前用真 CLI 执行 | 否 | 未实现 |
 | `assert.mjs` | 结局断言，默认导出 `{tasks, created, calls, session} => 结果数组` | 否 | #7 |
 
-加一条 scenario 就是加一个目录。目录形态与三面判定的完整理由见 ADR-0012。
+加一条 scenario 就是加一个目录，harness 一行不用改（前提是 `assert.mjs` 与 `preset.mjs` 已实现）。目录形态与三面判定的完整理由见 ADR-0012。
 
-**只有 `scenario.json` 与 `materials/` 现在能跑。** `preset.mjs`、`assert.mjs` 与 `probes/` 是已定的规范，实现归 #7；在那之前，目录里放了它们也不会被执行。
+**只有 `scenario.json` 与 `materials/` 现在能跑。** `preset.mjs` 与探针目录是已定的规范但还没有实现，也还没有 ticket 承接；`assert.mjs` 归 #7。在那之前，目录里放了它们也不会被执行。
 
 `preset.mjs` 建前置数据时只 import `harness/lib/projects.mjs` 的测试清单集合，写不出字面量 id；它建出的任务立刻记进本 run 的账本，和 shim 记的是同一份。
 
