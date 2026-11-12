@@ -145,25 +145,36 @@ test('createSandbox 没有 materials 时不建空目录', (t) => {
 });
 
 // #13 的核心断言：PowerShell 在沙箱 bin 内解析 dida 时必须命中 .ps1，
-// 且多行参数要经 @args 原样到达命令行。只断言生成文本不够——真正决定
+// 且多行参数要经 @args 原样到达真 CLI。只断言生成文本不够——真正决定
 // 保真与否的是 PowerShell 的解析优先级，那条只能端到端跑一次才知道。
-// 用 node -e 当假 CLI，判据是它回显的 argv。
+// 假 CLI 把观测结果写文件：混在 stdout 里会被 PowerShell 自身的输出干扰，
+// 也扛不住真 CLI 将来输出多行 JSON。
 const PS_TEST = process.platform === 'win32' ? test : test.skip;
 
+let cachedPowerShell;
 function findPowerShell() {
+  if (cachedPowerShell !== undefined) return cachedPowerShell;
+  cachedPowerShell = null;
   for (const exe of ['pwsh.exe', 'powershell.exe']) {
     const found = spawnSync(exe, ['-NoProfile', '-Command', '$PSVersionTable.PSVersion.Major'], { encoding: 'utf8' });
-    if (found.status === 0) return exe;
+    if (found.status === 0) { cachedPowerShell = exe; break; }
   }
-  return null;
+  return cachedPowerShell;
 }
+
+// PowerShell 里嵌路径：单引号串内的 ' 要写成 ''，否则 sandboxDir 含引号时会拼出坏脚本。
+const psLiteral = (value) => `'${value.replace(/'/g, "''")}'`;
 
 PS_TEST('PowerShell 命中 .ps1：多行 --content 经沙箱 shim 到达真 CLI 时仍是多行', (t) => {
   const shell = findPowerShell();
   if (!shell) return t.skip('本机没有 PowerShell');
   const dir = sandboxDir(t);
+  const observed = path.join(dir, 'observed.json');
   const fakeCli = path.join(dir, 'fake-cli.mjs');
-  fs.writeFileSync(fakeCli, 'console.log(JSON.stringify(process.argv.slice(2)));\n');
+  fs.writeFileSync(
+    fakeCli,
+    `import fs from 'node:fs';\nfs.writeFileSync(${JSON.stringify(observed)}, JSON.stringify(process.argv.slice(2)));\n`,
+  );
   const realCmd = path.join(dir, 'dida.cmd');
   fs.writeFileSync(realCmd, [
     '@ECHO off',
@@ -172,15 +183,14 @@ PS_TEST('PowerShell 命中 .ps1：多行 --content 经沙箱 shim 到达真 CLI 
 
   const binDir = path.join(dir, 'bin');
   writeShim(binDir, realCmd, PROJECTS);
-  assert.ok(fs.existsSync(path.join(binDir, 'dida.ps1')), 'bin 里必须有 dida.ps1，否则 PowerShell 会落回 .cmd');
+  assert.ok(fs.existsSync(path.join(binDir, 'dida.ps1')), 'bin 里必须有 dida.ps1，否则 PowerShell 只能命中 .cmd、多行会被截断');
 
-  const callLog = path.join(dir, 'calls.ndjson');
   const body = 'line1\nline2\nline3';
-  // 用 PS 变量承载多行正文，模拟 skill 文档里 here-string 的用法
+  // 用 PS 变量承载多行正文，对应 skill 文档里把正文放进变量的写法
   const script = [
-    `$env:PATH = '${binDir};' + $env:PATH`,
-    `$env:DIDA_CALL_LOG = '${callLog}'`,
-    `$env:DIDA_CREATED_FILE = '${path.join(dir, 'created.ndjson')}'`,
+    `$env:PATH = ${psLiteral(binDir + ';')} + $env:PATH`,
+    `$env:DIDA_CALL_LOG = ${psLiteral(path.join(dir, 'calls.ndjson'))}`,
+    `$env:DIDA_CREATED_FILE = ${psLiteral(path.join(dir, 'created.ndjson'))}`,
     `$body = "line1\`nline2\`nline3"`,
     `(Get-Command dida).Source`,
     `dida task get inbox nonexistent --content $body`,
@@ -188,7 +198,8 @@ PS_TEST('PowerShell 命中 .ps1：多行 --content 经沙箱 shim 到达真 CLI 
   const result = spawnSync(shell, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script], { encoding: 'utf8' });
 
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /dida\.ps1/, 'PowerShell 必须命中 .ps1');
-  const argv = JSON.parse(result.stdout.trim().split(/\r?\n/).pop());
+  assert.match(result.stdout, /[\\/]dida\.ps1/m, 'PowerShell 必须命中 .ps1');
+  assert.ok(fs.existsSync(observed), `真 CLI 未被调用；PowerShell stderr：${result.stderr}`);
+  const argv = JSON.parse(fs.readFileSync(observed, 'utf8'));
   assert.equal(argv[argv.indexOf('--content') + 1], body, '多行正文必须原样到达真 CLI');
 });

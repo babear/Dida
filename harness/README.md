@@ -125,7 +125,7 @@ run-<runId>/
 沙箱 `bin/` 下有这些文件：
 
 - `dida.ps1`：一行 PowerShell 壳，`node dida-shim.mjs <node 可执行> <真 CLI 脚本> @args`。PowerShell 同目录内优先命中它，`@args` 原样展开，多行参数保真。
-- `dida.cmd`：一行 shell 壳，`node dida-shim.mjs <node 可执行> <真 CLI 脚本> %*`。执行策略拒绝脚本、或调用方显式写 `dida.cmd` 时的兜底；这一路的多行仍截断。
+- `dida.cmd`：一行 shell 壳，`node dida-shim.mjs <node 可执行> <真 CLI 脚本> %*`。供调用方显式写 `dida.cmd`、或用非 PowerShell 的 shell 时使用；这一路的多行仍截断。
 - `dida-shim.mjs`：判定 + 记账 + 转发。
 - `lib/`：shim 只依赖的三个模块（`calllog.mjs`、`created.mjs`、`guard.mjs`），外加沙箱生成时烘焙的 `guard-config.mjs`（测试清单集合）。
 
