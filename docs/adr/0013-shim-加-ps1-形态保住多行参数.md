@@ -44,5 +44,5 @@ ADR-0004 拒绝 `.ps1` 的理由是「`dida.ps1` 未签名，PowerShell 默认�
 ## 后果
 
 - 多行 `--content` 在按 skill 使用 PowerShell 的正常路径上保真，过程断言可读到完整正文。
-- 显式调用 `dida.cmd`、或用绝对路径直调真 CLI 的调用，多行仍会截断；前者在本机执行策略下才会发生，后者本就由 `crossCheck` 标记。
+- 显式调用 `dida.cmd`、或用绝对路径直调真 CLI 的调用，多行仍会截断；前者只会由 agent 主动写全名引起，后者本就由 `crossCheck` 标记。
 - 若真 CLI 的安装形态变化（多一份 `.ps1` 同目录），沙箱内仍是我们的 `bin/dida.ps1` 优先，因为 PATH 顺序在前。

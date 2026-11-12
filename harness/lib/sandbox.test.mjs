@@ -198,7 +198,7 @@ PS_TEST('PowerShell 命中 .ps1：多行 --content 经沙箱 shim 到达真 CLI 
   const result = spawnSync(shell, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script], { encoding: 'utf8' });
 
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /[\\/]dida\.ps1/m, 'PowerShell 必须命中 .ps1');
+  assert.match(result.stdout, /[\\/]dida\.ps1/, 'PowerShell 必须命中 .ps1');
   assert.ok(fs.existsSync(observed), `真 CLI 未被调用；PowerShell stderr：${result.stderr}`);
   const argv = JSON.parse(fs.readFileSync(observed, 'utf8'));
   assert.equal(argv[argv.indexOf('--content') + 1], body, '多行正文必须原样到达真 CLI');
