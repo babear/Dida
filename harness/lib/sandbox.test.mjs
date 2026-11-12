@@ -216,18 +216,19 @@ PS_TEST('PowerShell 命中 .ps1：多行 --content 经沙箱 shim 到达真 CLI 
 // 两种都会打穿 #8 规则 2（content 从非空变空）：末尾那种读成"有 flag 没值"，
 // 中段那种把下一个 flag 当成 content 的值。pwsh 7 两种都保真。
 // 修不了（是 5.1 的参数传递行为），但要让它在测试里显形。
-function runEmptyContent(shell, t, extraAfter = '') {
-  const { env, observed } = shimFixture(sandboxDir(t));
+function runEmptyContent(shell, t, extraAfter = '', entry = 'dida') {
+  const { env, observed, binDir } = shimFixture(sandboxDir(t));
+  const target = entry === 'dida' ? 'dida' : `& ${psLiteral(path.join(binDir, 'dida.cmd'))}`;
   // 用白名单里的清单 id，否则 shim 会以越界拒掉，假 CLI 根本不会启动
-  const call = `dida task update t1 --id t1 --project ${PROJECTS[0]} --content $empty${extraAfter}`;
+  const call = `${target} task update t1 --id t1 --project ${PROJECTS[0]} --content $empty${extraAfter}`;
   spawnSync(shell, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', `${env}; $empty = ''; ${call}`], { encoding: 'utf8' });
   return JSON.parse(fs.readFileSync(observed, 'utf8'));
 }
 
-PS_TEST('空串 --content 在末尾：pwsh 7 保留空串，5.1 只留 flag', (t) => {
+PS_TEST('空串 --content 在末尾：pwsh 7 经 .ps1 保留空串，5.1 只留 flag', (t) => {
   if (hasShell('pwsh.exe')) {
     const argv = runEmptyContent('pwsh.exe', t);
-    assert.equal(argv[argv.indexOf('--content') + 1], '', 'pwsh 7 必须保住空串');
+    assert.equal(argv[argv.indexOf('--content') + 1], '', 'pwsh 7 经 .ps1 必须保住空串');
   }
   if (hasShell('powershell.exe')) {
     // 5.1 的已知行为：flag 留下、值消失，下标 +1 越界得 undefined。
@@ -243,6 +244,14 @@ PS_TEST('空串 --content 在中段：5.1 把下一个 flag 顶成值', (t) => {
   // 于是「content 从非空变空」永远不触发。
   const argv = runEmptyContent('powershell.exe', t, ' --title 之后');
   assert.equal(argv[argv.indexOf('--content') + 1], '--title', '5.1 把 --title 顶成 content 的值；若不再如此请更新 ADR-0013 与本断言');
+});
+
+// `.cmd` 入口的空串失真与 shell 无关：它不经过 PowerShell 的 @args，pwsh 7 也丢。
+// 这条与上面两条合起来才是完整矩阵（见 ADR-0013 的表）。
+PS_TEST('空串 --content 经 .cmd：pwsh 7 也丢值（入口导致，不是 shell）', (t) => {
+  if (!hasShell('pwsh.exe')) return t.skip('本机没有 pwsh 7');
+  const argv = runEmptyContent('pwsh.exe', t, '', 'cmd');
+  assert.equal(argv[argv.indexOf('--content') + 1], undefined, '.cmd 入口丢空串值；若不再如此请更新 ADR-0013 与本断言');
 });
 
 // `--` 分隔符经 .ps1 会消失：PowerShell 把它当自己的参数终止符吃掉，不再往下传。

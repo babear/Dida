@@ -63,8 +63,9 @@ export function resolveRealDidaCmd(searchPath = process.env.PATH ?? '') {
 // shim 不是再转一次 .cmd：那样 %* 会把多行 --content 截断成第一行。
 // 改为让壳只启动 node 记账脚本，由它 spawn 真 CLI 的入口，argv 不经过 cmd 二次解析。
 // 同目录放 .ps1 与 .cmd 两份壳：PowerShell 优先命中 .ps1，多行参数在那里保真（#13）。
-// .cmd 的主要职责是 resolveRealDidaCmd 的解析源——shim 靠从它抠出 node 与脚本入口；
-// 它的多行仍会截断，且不接执行策略的拒绝（AllSigned 下解析到 .ps1 就报错，不回落）。
+// .cmd 供 agent 显式写全名时使用，多行与空串值都会失真；它不接执行策略的拒绝
+// （AllSigned 下解析到 .ps1 就报错，不回落）。注意 resolveRealDidaCmd 解析的是 PATH 上
+// 真 CLI 的 dida.cmd，与这里生成的壳无关。
 const SHIM_SCRIPT_SOURCE = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'dida-shim.mjs');
 const SHIM_LIB_SOURCE = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'lib');
 
