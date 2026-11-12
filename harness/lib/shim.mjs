@@ -26,8 +26,8 @@ export function renderCmdShim({ program, script, shimJs }) {
 }
 
 // PowerShell 同目录内优先解析 .ps1 而非 .cmd，而 @args 原样展开、不经 cmd 解析：
-// 多行 --content 只有在 .ps1 这条入口上才保真（#13）。.cmd 供显式调用与非 PowerShell
-// shell 使用；它不接执行策略的拒绝（AllSigned 下 .ps1 直接报错、不回落，见 ADR-0013）。
+// 多行 --content 只有在 .ps1 这条入口上才保真（#13）。.cmd 的主要职责是作为
+// resolveRealDidaCmd 的解析源；它不接执行策略的拒绝（AllSigned 下 .ps1 直接报错、不回落）。
 export function renderPs1Shim({ program, script, shimJs }) {
   return [
     `node "${shimJs}" "${program}" "${script}" @args`,
