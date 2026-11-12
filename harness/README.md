@@ -81,7 +81,7 @@ npm run test:harness  # harness 自己的单元测试，不烧 API
 | 结果 | 含义 | 怎么修 |
 |---|---|---|
 | `FAILED` | 断言未通过，skill 没做到 | 改 skill |
-| `BROKEN` | 断言模块没给出结果数组，用例有缺陷 | 改用例 |
+| `BROKEN` | 断言模块没给出合法结果（抛异常、返回非数组、元素缺布尔 `ok`、稀疏数组），用例有缺陷 | 改用例 |
 | `INVALID` | 终态快照取不到，结果不可归因 | 重跑 |
 | `MISCONFIGURED` | 缺 `assert.mjs`，不开会话但仍落一份只含判定的报告 | 补用例，或移到 `probes/` |
 | `NOT FOUND` | `--scenario` 写错 id | 改正 id |

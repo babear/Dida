@@ -66,14 +66,31 @@ test('断言返回的不是数组时标 evaluated=false', async () => {
   assert.match(results[0].name, /数组/);
 });
 
-test('数组里混了 null / undefined 时归一成失败项，不让上层 every 抛异常', async () => {
+test('数组里混了 null / undefined 时归一成失败项，且标成「用例写错了」而不是断言失败', async () => {
   const { evaluated, results } = await runAssert(() => [null, undefined, { ok: true, name: '正常' }], INPUT);
-  assert.equal(evaluated, true, '算出结果了，只是元素形状不对——这是用例缺陷但确实评过');
+  assert.equal(evaluated, false, '元素形状不对指向用例，不是 skill 没做到');
   assert.equal(results.length, 3);
   assert.match(results[0].name, /第 1 项/);
   assert.match(results[1].name, /第 2 项/);
   assert.equal(results[2].ok, true);
+  // 归一化之后 every 能正常求值——这是崩溃的实际触发点
   assert.equal(results.every((result) => result.ok), false);
+  // malformed 标记是内部的，不该漏进给断言作者看的结果里
+  assert.equal(Object.hasOwn(results[0], 'malformed'), false);
+});
+
+test('稀疏数组不能一条断言都没跑就判通过', async () => {
+  const { evaluated, results } = await runAssert(() => new Array(5), INPUT);
+  assert.equal(evaluated, false, 'new Array(5) 是空位数组，不是「零条断言」');
+  assert.equal(results.length, 5, '每个空位都要变成一条失败项');
+  assert.equal(results.some((_, index) => !(index in results)), false, '不应残留空位');
+  assert.equal(results.every((result) => result.ok), false);
+});
+
+test('合法的空数组仍是零条断言通过，与稀疏数组区分开', async () => {
+  const { evaluated, results } = await runAssert(() => [], INPUT);
+  assert.equal(evaluated, true);
+  assert.deepEqual(results, []);
 });
 
 test('元素缺布尔 ok 时也算形状不对', async () => {
@@ -116,7 +133,7 @@ test('断言模块抛异常 → broken（去改用例），不是 failed', async
     input: INPUT,
   });
   assert.equal(out.status, 'broken');
-  assert.match(out.detail, /没能给出结果数组/);
+  assert.match(out.detail, /合法的结果数组/);
 });
 
 test('断言返回非数组 → broken（去改用例）', async () => {

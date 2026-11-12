@@ -17,9 +17,11 @@ export async function loadAssert(scenarioDir) {
 // 非对象或缺 ok 的元素归一化成一条失败结果：`[null]`（例如 `tasks.map(t => t && {...})`
 // 的产物）会让上层 `results.every(r => r.ok)` 抛 TypeError，而那时会话已结束、
 // manifest 还没落盘、清场还没执行——整场景的事实就丢了。
+// malformed 只用来让调用方知道「用例写错了」，不写进给断言作者看的结果里。
 function normalizeResult(result, index) {
   if (result && typeof result === 'object' && typeof result.ok === 'boolean') return result;
   return {
+    malformed: true,
     ok: false,
     name: `断言结果第 ${index + 1} 项形状不对`,
     expected: '带布尔 ok 的对象',
@@ -31,6 +33,9 @@ function normalizeResult(result, index) {
 // 一次运行要跑出所有失败项，不能因为断言自己写崩了就丢了整场景的结论。
 // evaluated 区分「用例自己算出了结论」与「用例根本没算出来」——后者是用例缺陷，
 // 不是 skill 缺陷，上层要分开判。
+// 坏元素也算「没算出来」：它指向用例写错了，不是 skill 没做到。用 Array.from
+// 而不是 .map ——稀疏数组的空位在 map 里会被跳过，`new Array(5)` 会让 every
+// 一路放行、直接判通过。
 export async function runAssert(assertionFn, input) {
   let results;
   try {
@@ -41,7 +46,12 @@ export async function runAssert(assertionFn, input) {
   if (!Array.isArray(results)) {
     return { evaluated: false, results: [{ ok: false, name: '断言应返回数组', expected: '数组', actual: typeof results }] };
   }
-  return { evaluated: true, results: results.map(normalizeResult) };
+  const normalized = Array.from(results, normalizeResult);
+  const malformed = normalized.some((result) => result.malformed);
+  return {
+    evaluated: !malformed,
+    results: normalized.map(({ malformed: _ignored, ...result }) => result),
+  };
 }
 
 // 一条 scenario 的结局判定。三类的分界照 ADR-0012：用例缺陷判 broken（去修用例），
@@ -59,7 +69,9 @@ export async function decideAssertion({ completed, stateError, assertionFn, inpu
 
   try {
     const { evaluated, results } = await runAssert(assertionFn, input);
-    if (!evaluated) return { status: 'broken', detail: '断言模块没能给出结果数组', results };
+    if (!evaluated) {
+      return { status: 'broken', detail: '断言模块没给出合法的结果数组（抛异常、返回非数组，或元素缺布尔 ok）', results };
+    }
     return { status: results.every((result) => result.ok) ? 'passed' : 'failed', results };
   } catch (error) {
     // 归一化本身炸了（元素的 expected 是循环引用之类）：仍要留下结论让清场照常跑。
