@@ -32,9 +32,16 @@ ADR-0004 拒绝 `.ps1` 的理由是「`dida.ps1` 未签名，PowerShell 默认�
 
 ### 空串参数：`@args` 的保真有一个例外
 
-`--content ''`（清空正文的写法）在 Windows PowerShell 5.1 上会连同 flag 一起消失，到达 shim 的 argv 里再也找不到 `--content`；pwsh 7 保真。`.cmd` 路径同样如此。
+`--content ''`（清空正文的写法）在 Windows PowerShell 5.1 上会丢掉空值、保留 flag：
 
-这直接影响 #8 的过程断言规则 2：在 5.1 上「content 从非空变空」会被读成「这次调用没传 content」，判据失真。测试 `harness/lib/sandbox.test.mjs` 对这个行为两端都有断言，锁住现状。
+| 写法 | 到达 shim 的 argv（5.1） |
+|---|---|
+| `--content $empty`（末尾） | `[..., "--content"]` |
+| `--content $empty --title x`（中段） | `[..., "--content", "--title", "x"]` |
+
+pwsh 7 两种都保真。`.cmd` 路径与 5.1 相同。
+
+这直接影响 #8 的过程断言规则 2：末尾那种读成「有 flag 没值」，中段那种把下一个 flag 当成 content 的值，判据都会失真。测试 `harness/lib/sandbox.test.mjs` 对这个行为两端都有断言，锁住现状。
 
 ## 决定
 

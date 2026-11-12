@@ -151,29 +151,29 @@ test('createSandbox 没有 materials 时不建空目录', (t) => {
 // 也扛不住真 CLI 将来输出多行 JSON。
 const PS_TEST = process.platform === 'win32' ? test : test.skip;
 
+// 某个 shell 是否可用。缓存探测结果：真起 PowerShell 一次约 1 秒，而套件里要问好几遍。
+const shellAvailable = new Map();
+function hasShell(exe) {
+  if (!shellAvailable.has(exe)) {
+    const probe = spawnSync(exe, ['-NoProfile', '-Command', '$PSVersionTable.PSVersion.Major'], { encoding: 'utf8' });
+    shellAvailable.set(exe, probe.status === 0);
+  }
+  return shellAvailable.get(exe);
+}
+
 let cachedPowerShell;
 function findPowerShell() {
   if (cachedPowerShell !== undefined) return cachedPowerShell;
-  cachedPowerShell = null;
-  for (const exe of ['pwsh.exe', 'powershell.exe']) {
-    const found = spawnSync(exe, ['-NoProfile', '-Command', '$PSVersionTable.PSVersion.Major'], { encoding: 'utf8' });
-    if (found.status === 0) { cachedPowerShell = exe; break; }
-  }
+  cachedPowerShell = ['pwsh.exe', 'powershell.exe'].find(hasShell) ?? null;
   return cachedPowerShell;
-}
-
-// 某个 shell 是否可用；用于对 5.1 / 7 分别断言不同的已知行为。
-function hasShell(exe) {
-  return spawnSync(exe, ['-NoProfile', '-Command', '$PSVersionTable.PSVersion.Major'], { encoding: 'utf8' }).status === 0;
 }
 
 // PowerShell 里嵌路径：单引号串内的 ' 要写成 ''，否则 sandboxDir 含引号时会拼出坏脚本。
 const psLiteral = (value) => `'${value.replace(/'/g, "''")}'`;
 
-PS_TEST('PowerShell 命中 .ps1：多行 --content 经沙箱 shim 到达真 CLI 时仍是多行', (t) => {
-  const shell = findPowerShell();
-  if (!shell) return t.skip('本机没有 PowerShell');
-  const dir = sandboxDir(t);
+// 建沙箱 bin，并让假 CLI 把收到的 argv 写进 observed.json。返回环境前缀与观测文件路径，
+// 供下面几条需要真起 PowerShell 的用例共用。
+function shimFixture(dir) {
   const observed = path.join(dir, 'observed.json');
   const fakeCli = path.join(dir, 'fake-cli.mjs');
   fs.writeFileSync(
@@ -181,25 +181,26 @@ PS_TEST('PowerShell 命中 .ps1：多行 --content 经沙箱 shim 到达真 CLI 
     `import fs from 'node:fs';\nfs.writeFileSync(${JSON.stringify(observed)}, JSON.stringify(process.argv.slice(2)));\n`,
   );
   const realCmd = path.join(dir, 'dida.cmd');
-  fs.writeFileSync(realCmd, [
-    '@ECHO off',
-    `"${process.execPath}" "${fakeCli}" %*`,
-  ].join('\r\n'));
-
+  fs.writeFileSync(realCmd, ['@ECHO off', `"${process.execPath}" "${fakeCli}" %*`].join('\r\n'));
   const binDir = path.join(dir, 'bin');
   writeShim(binDir, realCmd, PROJECTS);
+  const env = [
+    `$env:PATH = ${psLiteral(binDir + ';')} + $env:PATH`,
+    `$env:DIDA_CALL_LOG = ${psLiteral(path.join(dir, 'calls.ndjson'))}`,
+    `$env:DIDA_CREATED_FILE = ${psLiteral(path.join(dir, 'created.ndjson'))}`,
+  ].join('; ');
+  return { env, observed, binDir };
+}
+
+PS_TEST('PowerShell 命中 .ps1：多行 --content 经沙箱 shim 到达真 CLI 时仍是多行', (t) => {
+  const shell = findPowerShell();
+  if (!shell) return t.skip('本机没有 PowerShell');
+  const { env, observed, binDir } = shimFixture(sandboxDir(t));
   assert.ok(fs.existsSync(path.join(binDir, 'dida.ps1')), 'bin 里必须有 dida.ps1，否则 PowerShell 只能命中 .cmd、多行会被截断');
 
   const body = 'line1\nline2\nline3';
   // 用 PS 变量承载多行正文，对应 skill 文档里把正文放进变量的写法
-  const script = [
-    `$env:PATH = ${psLiteral(binDir + ';')} + $env:PATH`,
-    `$env:DIDA_CALL_LOG = ${psLiteral(path.join(dir, 'calls.ndjson'))}`,
-    `$env:DIDA_CREATED_FILE = ${psLiteral(path.join(dir, 'created.ndjson'))}`,
-    `$body = "line1\`nline2\`nline3"`,
-    `(Get-Command dida).Source`,
-    `dida task get inbox nonexistent --content $body`,
-  ].join('; ');
+  const script = `${env}; $body = "line1\`nline2\`nline3"; (Get-Command dida).Source; dida task get inbox nonexistent --content $body`;
   const result = spawnSync(shell, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script], { encoding: 'utf8' });
 
   assert.equal(result.status, 0, result.stderr);
@@ -209,44 +210,37 @@ PS_TEST('PowerShell 命中 .ps1：多行 --content 经沙箱 shim 到达真 CLI 
   assert.equal(argv[argv.indexOf('--content') + 1], body, '多行正文必须原样到达真 CLI');
 });
 
-// Windows PowerShell 5.1 会吞掉空串参数：`--content ''` 到达 shim 时
-// flag 与值一起消失，整条 argv 里再也找不到 `--content`。这会打穿 #8 规则 2
-// （content 从非空变空）——判据看到的是"这次调用没传 content"，而不是"传了空的"。
-// pwsh 7 不吞。修不了（是 5.1 的参数传递行为），但要让它在测试里显形。
-function emptyContentValue(shell, t) {
-  const dir = sandboxDir(t);
-  const fakeCli = path.join(dir, 'fake-cli.mjs');
-  const observed = path.join(dir, 'observed.json');
-  fs.writeFileSync(
-    fakeCli,
-    `import fs from 'node:fs';\nfs.writeFileSync(${JSON.stringify(observed)}, JSON.stringify(process.argv.slice(2)));\n`,
-  );
-  const realCmd = path.join(dir, 'dida.cmd');
-  fs.writeFileSync(realCmd, ['@ECHO off', `"${process.execPath}" "${fakeCli}" %*`].join('\r\n'));
-  const binDir = path.join(dir, 'bin');
-  writeShim(binDir, realCmd, PROJECTS);
-
-  const script = [
-    `$env:PATH = ${psLiteral(binDir + ';')} + $env:PATH`,
-    `$env:DIDA_CALL_LOG = ${psLiteral(path.join(dir, 'calls.ndjson'))}`,
-    `$env:DIDA_CREATED_FILE = ${psLiteral(path.join(dir, 'created.ndjson'))}`,
-    `$empty = ''`,
-    // 用白名单里的清单 id，否则 shim 会以越界拒掉，假 CLI 根本不会启动
-    `dida task update t1 --id t1 --project ${PROJECTS[0]} --content $empty`,
-  ].join('; ');
-  spawnSync(shell, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script], { encoding: 'utf8' });
-  const argv = JSON.parse(fs.readFileSync(observed, 'utf8'));
-  return argv[argv.indexOf('--content') + 1];
+// Windows PowerShell 5.1 会吞掉空串的值，但保留 flag：
+//   `--content $empty`（末尾）       → `[..., "--content"]`
+//   `--content $empty --title x`（中段） → `[..., "--content", "--title", "x"]`
+// 两种都会打穿 #8 规则 2（content 从非空变空）：末尾那种读成"有 flag 没值"，
+// 中段那种把下一个 flag 当成 content 的值。pwsh 7 两种都保真。
+// 修不了（是 5.1 的参数传递行为），但要让它在测试里显形。
+function runEmptyContent(shell, t, extraAfter = '') {
+  const { env, observed } = shimFixture(sandboxDir(t));
+  // 用白名单里的清单 id，否则 shim 会以越界拒掉，假 CLI 根本不会启动
+  const call = `dida task update t1 --id t1 --project ${PROJECTS[0]} --content $empty${extraAfter}`;
+  spawnSync(shell, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', `${env}; $empty = ''; ${call}`], { encoding: 'utf8' });
+  return JSON.parse(fs.readFileSync(observed, 'utf8'));
 }
 
-PS_TEST('空串 --content：pwsh 7 保真', (t) => {
-  if (!hasShell('pwsh.exe')) return t.skip('本机没有 pwsh 7');
-  assert.equal(emptyContentValue('pwsh.exe', t), '', 'pwsh 7 必须保住空串');
+PS_TEST('空串 --content 在末尾：pwsh 7 保留空串，5.1 只留 flag', (t) => {
+  if (hasShell('pwsh.exe')) {
+    const argv = runEmptyContent('pwsh.exe', t);
+    assert.equal(argv[argv.indexOf('--content') + 1], '', 'pwsh 7 必须保住空串');
+  }
+  if (hasShell('powershell.exe')) {
+    // 5.1 的已知行为：flag 留下、值消失，下标 +1 越界得 undefined。
+    // 锁在这里：哪天 5.1 变了这条会红，提醒重估 #8 规则 2 在 5.1 上的可判性。
+    const argv = runEmptyContent('powershell.exe', t);
+    assert.equal(argv[argv.indexOf('--content') + 1], undefined, '5.1 吞掉 --content 的值；若不再如此请更新 ADR-0013 与本断言');
+  }
 });
 
-PS_TEST('空串 --content：5.1 连 flag 一起吞掉（已知局限，锁住以便变化时报警）', (t) => {
+PS_TEST('空串 --content 在中段：5.1 把下一个 flag 顶成值', (t) => {
   if (!hasShell('powershell.exe')) return t.skip('本机没有 Windows PowerShell 5.1');
-  // 5.1 的已知行为：`--content ''` 整个消失，argv 里 findIndex 得 -1、取到 undefined。
-  // 锁在这里：哪天 5.1 变了这条会红，提醒重估 #8 规则 2 在 5.1 上的可判性。
-  assert.equal(emptyContentValue('powershell.exe', t), undefined, '5.1 吞掉 --content 与其值；若不再如此请更新 ADR-0013 与本断言');
+  // 这一种比末尾那种更危险：判据会读到 content === "--title"，看起来像传了非空正文，
+  // 于是「content 从非空变空」永远不触发。
+  const argv = runEmptyContent('powershell.exe', t, ' --title 之后');
+  assert.equal(argv[argv.indexOf('--content') + 1], '--title', '5.1 把 --title 顶成 content 的值；若不再如此请更新 ADR-0013 与本断言');
 });
