@@ -49,7 +49,7 @@ test('writeShim 把测试清单集合烘焙进 lib/guard-config.mjs', (t) => {
   assert.equal(fs.readFileSync(configPath, 'utf8'), renderGuardConfig(PROJECTS));
 });
 
-test('writeShim 复制 shim 依赖的模块，并生成 dida.cmd 壳', (t) => {
+test('writeShim 复制 shim 依赖的模块，并生成 dida.cmd 与 dida.ps1 两份壳', (t) => {
   const dir = sandboxDir(t);
   const realCmd = path.join(dir, 'dida.cmd');
   fs.writeFileSync(realCmd, REAL_CMD);
@@ -61,6 +61,8 @@ test('writeShim 复制 shim 依赖的模块，并生成 dida.cmd 壳', (t) => {
   }
   assert.ok(fs.existsSync(path.join(dir, 'bin', 'dida-shim.mjs')));
   assert.match(fs.readFileSync(path.join(dir, 'bin', 'dida.cmd'), 'utf8'), /dida-shim\.mjs/);
+  // PowerShell 同目录内优先 .ps1；缺了它多行 --content 会落回 .cmd 被截断（#13）
+  assert.match(fs.readFileSync(path.join(dir, 'bin', 'dida.ps1'), 'utf8'), /dida-shim\.mjs/);
 });
 
 test('writeShim 缺集合时当场报错，不留下半成品配置', (t) => {

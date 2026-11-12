@@ -37,7 +37,7 @@ shim 拆成两部分：
 
 ## 后果
 
-- `.cmd` 那一层仍会解析一遍 argv：`%VAR%` 在到达 `dida-shim.mjs` 之前已经被展开，**多行 `--content` 仍会在 `.cmd` 处截断**。这一条没有在本 ADR 里解决，见 README 的已知边界。
+- `.cmd` 那一层仍会解析一遍 argv：`%VAR%` 在到达 `dida-shim.mjs` 之前已经被展开，**多行 `--content` 仍会在 `.cmd` 处截断**。`.ps1` 入口补上了这一点，见 ADR-0013；显式走 `.cmd` 时仍成立。
 - 绕开 cmd 后，真 CLI 的退出码是 node 的退出码而非 cmd 的；实测一致（都是 CLI 进程本身的退出码）。
 - 若真 CLI 换了一种生成 `.cmd` 的方式（不是 npm 的模板），解析会失败并报错，需要更新正则。测试 `test/shimparse.test.mjs` 覆盖了这条。
 - Node 24 起 `spawnSync` 不允许直接执行 `.cmd`（`EINVAL`），所以清场路径也复用同样的"解析入口 + 直接 spawn"，见 `run.mjs` 的 `realDida()`。

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 
-import { parseCmdShim, renderCmdShim } from './shim.mjs';
+import { parseCmdShim, renderCmdShim, renderPs1Shim } from './shim.mjs';
 
 const REAL_CMD = [
   '@ECHO off',
@@ -57,4 +57,20 @@ test('shim 脚本以 node 调真入口，argv 原样透传，不经过 cmd 二�
   assert.match(text, /dida-shim\.mjs/);
   assert.match(text, /node\.exe/);
   assert.match(text, /dist\\index\.js/);
+});
+
+// PowerShell 对 @args 原样展开：多行 --content 不经 cmd 解析，到达 shim 前是完整的。
+// 这与 .cmd 的 %* 是两条入口路径，后者仍会截断（见 #13）。
+test('.ps1 壳用 @args 转发，路径加引号，退出码透传', () => {
+  const text = renderPs1Shim({
+    program: 'D:\\Program Files\\nodejs\\node_global\\node.exe',
+    script: 'D:\\Program Files\\nodejs\\node_global\\node_modules\\@suibiji\\dida-cli\\dist\\index.js',
+    shimJs: 'C:\\sandbox\\bin\\dida-shim.mjs',
+  });
+  assert.match(text, /dida-shim\.mjs/);
+  assert.match(text, /@args/);
+  assert.match(text, /exit \$LASTEXITCODE/);
+  // program 与 script 必须各自带引号：路径里有空格时裸写会被拆成多个参数
+  assert.match(text, /"D:\\Program Files\\nodejs\\node_global\\node\.exe"/);
+  assert.match(text, /"D:\\Program Files\\nodejs\\node_global\\node_modules\\@suibiji\\dida-cli\\dist\\index\.js"/);
 });

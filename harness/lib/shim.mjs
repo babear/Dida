@@ -24,3 +24,13 @@ export function renderCmdShim({ program, script, shimJs }) {
     '',
   ].join('\r\n');
 }
+
+// PowerShell 同目录内优先解析 .ps1 而非 .cmd，而 @args 原样展开、不经 cmd 解析：
+// 多行 --content 只有在 .ps1 这条入口上才保真（#13）。.cmd 留着给执行策略拒绝脚本的场景。
+export function renderPs1Shim({ program, script, shimJs }) {
+  return [
+    `node "${shimJs}" "${program}" "${script}" @args`,
+    'exit $LASTEXITCODE',
+    '',
+  ].join('\r\n');
+}
