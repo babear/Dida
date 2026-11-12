@@ -20,7 +20,7 @@ npm run test:harness  # harness 自己的单元测试，不烧 API
 | `--hold` | 关 | 跑完不清场，留现场给人看；之后用 `--clean <runId>` 收尾 |
 | `--clean <runId>` | — | 只按该 run 的 `created.ndjson` 删除任务，然后退出 |
 
-退出码：任一 scenario 断言未通过、会话非零退出或超时、用例配置错误（缺 `assert.mjs` 或断言模块加载失败）、终态快照取不到、清场中止或删除失败，都是 1。
+退出码：任一 scenario 断言未通过、会话非零退出或超时、用例配置错误（缺 `assert.mjs`，或断言模块加载失败、没给出合法结果）、终态快照取不到、清场中止或删除失败，都是 1。
 
 ### 清场纪律
 
@@ -74,7 +74,7 @@ npm run test:harness  # harness 自己的单元测试，不烧 API
 
 1. **可信度检查**：调用日志条数少于轨迹里的命令调用数，说明有调用绕过 shim。失败标 `invalid` 而非 `fail`——退出码同样非零，但语义是"重跑"。见 ADR-0012。
 2. **过程断言**：调用日志 argv 序列上的三条硬规则，见 ADR-0005。第 3 条（越界写入）现由 shim 当场拒绝并记 `rejected`，只需接进判定。
-3. **结局断言**：读终态快照 `runs/<runId>/state.json`——账本里每个 id 取回的任务现状，取不到的记 `null`。定位与清场同一套：先按测试清单枚举再按 id 找，不信账本记的 `projectId`（agent 可能用 `task move` 挪走任务），枚举不到才回退到账本值直查。
+3. **结局断言**：读终态快照 `runs/<runId>/state.json`——账本里每个 id 取回的任务现状，取不到的记 `null`。定位与清场同一套：先按测试清单枚举再按 id 找，因为 agent 可能用 `task move` 挪走任务；枚举不到才回退到账本记的 `projectId` 直查。
 
 **当前判定口径**：会话正常结束（`PASSED` / `FAILED` / `INCOMPLETE`）+ 结局断言。除 `PASSED` 外退出码都是 1。
 
@@ -165,7 +165,7 @@ run-<runId>/
 | `trace.ndjson` | 被测会话的原始轨迹 |
 | `calls.ndjson` | shim 记下的调用序列，每行 `{argv, at, decision}`；被拒的另有 `reason` 与 `targets` |
 | `created.ndjson` | 本 run 建成并立刻记账的任务，一行一条；清场与断言都只认这一份 |
-| `state.json` | 终态快照：账本里每个 id 取回的现状，取不到的记 `null`。按测试清单枚举定位，不信账本的 `projectId`。断言读它 |
+| `state.json` | 终态快照：账本里每个 id 取回的现状，取不到的记 `null`。按测试清单枚举定位，枚举不到才回退账本的 `projectId`。断言读它 |
 | `manifest.json` | 沙箱绝对路径、skill 指纹与文件数、git rev 与 dirty、三层模型信息、工具面、轮数、成本、调用数、创建数、清场结果、标记 |
 | `report.md` | 给人读的报告：首行是 skill 指纹 / 模型 / 沙箱路径，接着是判定结论与落败的断言，中间是本次创建的任务 id 表，末尾是摘要 |
 

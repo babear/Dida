@@ -1,12 +1,15 @@
 import { readCreated } from './created.mjs';
 
+// 退出码非零但 stdout 是合法 JSON 时照样收下：真 CLI 在错误路径上会带一行 libuv
+// 断言导致非零退出，按退出码一刀切会把拿到的任务全判成"列清单失败"。
 export function listTasks(dida, projectId) {
   const result = dida.run(['task', 'filter', '--projects', projectId, '--json']);
-  if (result.exitCode !== 0) {
+  const text = (result.stdout ?? '').trim();
+  try {
+    return text ? JSON.parse(text) : [];
+  } catch {
     throw new Error(`列清单 ${projectId} 的任务失败：${result.stderr.trim() || `exit ${result.exitCode}`}`);
   }
-  const text = result.stdout.trim();
-  return text ? JSON.parse(text) : [];
 }
 
 export function snapshotProjects(dida, projects) {

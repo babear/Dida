@@ -87,12 +87,6 @@ test('稀疏数组不能一条断言都没跑就判通过', async () => {
   assert.equal(results.every((result) => result.ok), false);
 });
 
-test('合法的空数组仍是零条断言通过，与稀疏数组区分开', async () => {
-  const { evaluated, results } = await runAssert(() => [], INPUT);
-  assert.equal(evaluated, true);
-  assert.deepEqual(results, []);
-});
-
 test('元素缺布尔 ok 时也算形状不对', async () => {
   const { results } = await runAssert(() => [{ ok: 'yes', name: 'x' }], INPUT);
   assert.equal(results[0].ok, false);

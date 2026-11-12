@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { hasCleanupProblem, writeUnusableRun } from './run.mjs';
+import { hasCleanupProblem, writeManifest, writeUnusableRun } from './run.mjs';
 
 function tmpRepo(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'run-test-'));
@@ -82,4 +82,22 @@ test('用例没跑起来时不建沙箱、不开会话：manifest 里没有会�
   const manifest = JSON.parse(fs.readFileSync(path.join(runDir, 'manifest.json'), 'utf8'));
   assert.equal(manifest.created.length, 0);
   assert.deepEqual(manifest.session, {});
+});
+
+test('manifest 里的循环引用不能让写文件抛错——抛了清场就跑不到', (t) => {
+  const dir = tmpRepo(t);
+  const circular = {};
+  circular.self = circular;
+
+  writeManifest(dir, { assertion: { results: [{ ok: false, name: 'x', expected: circular, actual: 'y' }] } });
+
+  const text = fs.readFileSync(path.join(dir, 'manifest.json'), 'utf8');
+  assert.match(text, /循环引用/);
+  assert.doesNotThrow(() => JSON.parse(text), '落盘的仍是合法 JSON');
+});
+
+test('manifest 里的 BigInt 折成字符串，不抛错', (t) => {
+  const dir = tmpRepo(t);
+  assert.doesNotThrow(() => writeManifest(dir, { assertion: { results: [{ ok: false, expected: 1n }] } }));
+  assert.match(fs.readFileSync(path.join(dir, 'manifest.json'), 'utf8'), /1n/);
 });

@@ -80,7 +80,7 @@ node harness/run.mjs --scenario <id>   # #20 落地前，探针还只能放在 s
 
 | 文件 | 看什么 |
 |---|---|
-| `state.json` | 账本里每条任务的完整现状。按测试清单枚举定位，不信账本记的 `projectId`。断言读的就是它 |
+| `state.json` | 账本里每条任务的完整现状。按测试清单枚举定位，枚举不到才回退账本的 `projectId`。断言读的就是它 |
 | `calls.ndjson` | 被测 agent 实际调了哪些 dida 命令，argv 是解析后的数组 |
 | `trace.ndjson` | agent 的完整步骤。只在需要看它为什么这么做时读 |
 

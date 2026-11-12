@@ -33,10 +33,18 @@ function cost(costUsd) {
 
 // 期望值与实际值可能是对象（`{kind: 'TEXT'}`），直接拼进字符串会变成 [object Object]，
 // 而这条报告的全部意义就是让人一眼看出差在哪。控制台输出也走这一个，两处口径一致。
+// 序列化会失败的值（循环引用、BigInt）折成一句人话：这是报告里的一行字，不该让整次运行崩掉。
 export function formatValue(value) {
   if (value === undefined) return '（未给出）';
   if (value === '') return '（空）';
-  return typeof value === 'string' ? value : JSON.stringify(value);
+  if (typeof value !== 'string') {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return `（无法序列化：${typeof value}）`;
+    }
+  }
+  return value;
 }
 
 export function renderAssertions(results) {
@@ -44,6 +52,14 @@ export function renderAssertions(results) {
     .filter((result) => !result.ok)
     .map((result) => `- ${result.name}：期望 ${formatValue(result.expected)}，实际 ${formatValue(result.actual)}`)
     .join('\n');
+}
+
+// broken 与 invalid 的报告形状一样：一句标题、一句原因、可选的失败项明细。
+// 区别只在措辞指向「改用例」还是「重跑」。
+function detailBlock(title, detail, results) {
+  const lines = ['## 判定', '', `**${title}**`, '', detail];
+  if (results?.length) lines.push('', renderAssertions(results));
+  return lines.join('\n');
 }
 
 export function renderVerdict({ assertion, session }) {
@@ -55,21 +71,11 @@ export function renderVerdict({ assertion, session }) {
   }
   if (assertion?.status === 'broken') {
     // 用例自己的问题：断言模块坏了、没给出结果数组。修用例，不用改 skill。
-    lines.push('**用例配置错误：断言没给出结果**', '');
-    lines.push(assertion.detail ?? '断言模块没能给出结果数组。');
-    if (assertion.results?.length) {
-      lines.push('', renderAssertions(assertion.results));
-    }
-    return lines.join('\n');
+    return detailBlock('用例配置错误：断言没给出结果', assertion.detail ?? '断言模块没能给出结果数组。', assertion.results);
   }
   if (assertion?.status === 'invalid') {
     // 结果不可归因：重跑，不当作 skill 缺陷（ADR-0012）。
-    lines.push('**本次结果不可归因，需重跑**', '');
-    lines.push(assertion.detail ?? '');
-    if (assertion.results?.length) {
-      lines.push('', renderAssertions(assertion.results));
-    }
-    return lines.join('\n');
+    return detailBlock('本次结果不可归因，需重跑', assertion.detail ?? '', assertion.results);
   }
   if (!sessionCompleted(session ?? {})) {
     return '## 判定\n\n会话未正常结束，不评断言（见「会话」小节的退出码）。';

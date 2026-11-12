@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { cleanRun, planCleanup, snapshotProjects } from './cleanup.mjs';
+import { cleanRun, listTasks, planCleanup, snapshotProjects } from './cleanup.mjs';
 
 function tmpFile(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cleanup-test-'));
@@ -139,4 +139,16 @@ test('snapshotProjects 按清单各读一次', () => {
   assert.deepEqual(snapshot[P1].map((t) => t.id), [OWN]);
   assert.deepEqual(snapshot[P2], []);
   assert.equal(dida.calls.filter((c) => c[1] === 'filter').length, 2);
+});
+
+test('退出码非零但 stdout 是合法 JSON 时照样收下（真 CLI 错误路径带 libuv 断言）', () => {
+  const dida = {
+    run: () => ({ stdout: JSON.stringify([{ id: OWN }]), stderr: 'Assertion failed: …', exitCode: 1 }),
+  };
+  assert.deepEqual(listTasks(dida, P1).map((t) => t.id), [OWN]);
+});
+
+test('stdout 不是合法 JSON 时才抛错，并带上 stderr', () => {
+  const dida = { run: () => ({ stdout: 'DIDA API 错误 500', stderr: '网络抖动', exitCode: 1 }) };
+  assert.throws(() => listTasks(dida, P1), /网络抖动/);
 });

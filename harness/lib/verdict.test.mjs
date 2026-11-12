@@ -102,3 +102,14 @@ test('期望值与实际值是对象时按 JSON 写，不写成 [object Object]'
   assert.match(text, /"kind":"CHECKLIST"/);
   assert.doesNotMatch(text, /\[object Object\]/);
 });
+
+test('序列化不了的值（循环引用 / BigInt）折成一句人话，不让报告崩掉', () => {
+  const circular = {};
+  circular.self = circular;
+  const text = renderAssertions([
+    { ok: false, name: '循环', expected: circular, actual: 'y' },
+    { ok: false, name: '大数', expected: 1n, actual: 'y' },
+  ]);
+  assert.match(text, /无法序列化/);
+  assert.doesNotMatch(text, /object Object/);
+});

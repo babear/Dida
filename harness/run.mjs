@@ -150,7 +150,9 @@ async function runOne(options, scenario, projects, assertionFn) {
     state = [];
     stateError = error.message;
   }
-  fs.writeFileSync(statePath, JSON.stringify(state, null, 2));
+  // 取不到快照时不写 state.json：写一份空数组会让人以为「这次一条任务都没有」，
+  // 重放时读出的是假事实。文件缺失才是诚实的。
+  if (!stateError) fs.writeFileSync(statePath, JSON.stringify(state, null, 2));
 
   const sessionInfo = {
     exitCode: session.exitCode,
@@ -199,7 +201,8 @@ async function runOne(options, scenario, projects, assertionFn) {
       crossCheck: crossCheck(calls, summary.toolCalls),
     },
     created,
-    state: { path: statePath, count: state.length },
+    // count 为 null 表示没取到快照，与「取到了、0 条」区分开。
+    state: { path: statePath, count: stateError ? null : state.length, error: stateError },
     assertion,
     testProjects: projects,
     callerMarker: sandbox.callerMarker,
@@ -208,8 +211,23 @@ async function runOne(options, scenario, projects, assertionFn) {
   return { run: runKey, runDir, sandbox, manifest, session, createdFile };
 }
 
-function writeManifest(runDir, manifest) {
-  fs.writeFileSync(path.join(runDir, 'manifest.json'), JSON.stringify(manifest, null, 2));
+// manifest 里带着断言模块返回的原值，那些值不受我们控制：循环引用、BigInt 都会让
+// JSON.stringify 抛错。它抛在这里意味着清场还没跑——任务会留在真实清单里没人删。
+// 所以宁可把那个值折成一句人话，也不能让整份 manifest 写不出去。
+function safeStringify(value) {
+  const seen = new WeakSet();
+  return JSON.stringify(value, (key, entry) => {
+    if (typeof entry === 'bigint') return `${entry}n`;
+    if (entry && typeof entry === 'object') {
+      if (seen.has(entry)) return '[循环引用]';
+      seen.add(entry);
+    }
+    return entry;
+  }, 2);
+}
+
+export function writeManifest(runDir, manifest) {
+  fs.writeFileSync(path.join(runDir, 'manifest.json'), safeStringify(manifest));
 }
 
 function writeReport(runDir, manifest) {
@@ -365,7 +383,9 @@ async function main() {
     console.log(`  transcript=${path.relative(repoRoot, manifest.transcript.path)} events=${manifest.transcript.events} toolCalls=${manifest.transcript.toolCalls}`);
     console.log(`  calls=${path.relative(repoRoot, manifest.calls.path)} total=${manifest.calls.total} rejected=${manifest.calls.rejected} outOfBounds=${manifest.calls.outOfBounds}`);
     console.log(`  created=${manifest.created.length} 条${manifest.created.length ? '：' + manifest.created.map((e) => e.id).join('、') : ''}`);
-    console.log(`  state=${path.relative(repoRoot, manifest.state.path)}（${manifest.state.count} 条）`);
+    console.log(manifest.state.error
+      ? `  state=未落盘（${manifest.state.error}）`
+      : `  state=${path.relative(repoRoot, manifest.state.path)}（${manifest.state.count} 条）`);
     for (const result of manifest.assertion.results.filter((r) => !r.ok)) {
       console.error(`    断言未通过 ${result.name}：期望 ${formatValue(result.expected)}，实际 ${formatValue(result.actual)}`);
     }
