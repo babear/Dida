@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -141,4 +142,53 @@ test('createSandbox 没有 materials 时不建空目录', (t) => {
   t.after(() => fs.rmSync(sandbox.root, { recursive: true, force: true }));
 
   assert.equal(fs.existsSync(path.join(sandbox.root, 'materials')), false);
+});
+
+// #13 的核心断言：PowerShell 在沙箱 bin 内解析 dida 时必须命中 .ps1，
+// 且多行参数要经 @args 原样到达命令行。只断言生成文本不够——真正决定
+// 保真与否的是 PowerShell 的解析优先级，那条只能端到端跑一次才知道。
+// 用 node -e 当假 CLI，判据是它回显的 argv。
+const PS_TEST = process.platform === 'win32' ? test : test.skip;
+
+function findPowerShell() {
+  for (const exe of ['pwsh.exe', 'powershell.exe']) {
+    const found = spawnSync(exe, ['-NoProfile', '-Command', '$PSVersionTable.PSVersion.Major'], { encoding: 'utf8' });
+    if (found.status === 0) return exe;
+  }
+  return null;
+}
+
+PS_TEST('PowerShell 命中 .ps1：多行 --content 经沙箱 shim 到达真 CLI 时仍是多行', (t) => {
+  const shell = findPowerShell();
+  if (!shell) return t.skip('本机没有 PowerShell');
+  const dir = sandboxDir(t);
+  const fakeCli = path.join(dir, 'fake-cli.mjs');
+  fs.writeFileSync(fakeCli, 'console.log(JSON.stringify(process.argv.slice(2)));\n');
+  const realCmd = path.join(dir, 'dida.cmd');
+  fs.writeFileSync(realCmd, [
+    '@ECHO off',
+    `"${process.execPath}" "${fakeCli}" %*`,
+  ].join('\r\n'));
+
+  const binDir = path.join(dir, 'bin');
+  writeShim(binDir, realCmd, PROJECTS);
+  assert.ok(fs.existsSync(path.join(binDir, 'dida.ps1')), 'bin 里必须有 dida.ps1，否则 PowerShell 会落回 .cmd');
+
+  const callLog = path.join(dir, 'calls.ndjson');
+  const body = 'line1\nline2\nline3';
+  // 用 PS 变量承载多行正文，模拟 skill 文档里 here-string 的用法
+  const script = [
+    `$env:PATH = '${binDir};' + $env:PATH`,
+    `$env:DIDA_CALL_LOG = '${callLog}'`,
+    `$env:DIDA_CREATED_FILE = '${path.join(dir, 'created.ndjson')}'`,
+    `$body = "line1\`nline2\`nline3"`,
+    `(Get-Command dida).Source`,
+    `dida task get inbox nonexistent --content $body`,
+  ].join('; ');
+  const result = spawnSync(shell, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script], { encoding: 'utf8' });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /dida\.ps1/, 'PowerShell 必须命中 .ps1');
+  const argv = JSON.parse(result.stdout.trim().split(/\r?\n/).pop());
+  assert.equal(argv[argv.indexOf('--content') + 1], body, '多行正文必须原样到达真 CLI');
 });

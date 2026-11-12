@@ -98,7 +98,7 @@ run-<runId>/
 │   ├── settings.json      # 只含源 settings.json 的 ANTHROPIC_* 键
 │   └── skills/dida-cli/   # 从 --skill-path 整体复制，末尾追加调用方标记
 ├── agents.json            # 从 harness/agents.json 复制，工具面限定
-├── bin/                   # 前置到 PATH 的 shim：dida.cmd + dida-shim.mjs + lib/
+├── bin/                   # 前置到 PATH 的 shim：dida.ps1 + dida.cmd + dida-shim.mjs + lib/
 └── materials/             # scenario 素材（若有）
 ```
 
@@ -122,9 +122,10 @@ run-<runId>/
 
 ## shim
 
-沙箱 `bin/` 下有三类文件：
+沙箱 `bin/` 下有这些文件：
 
-- `dida.cmd`：一行 shell 壳，`node dida-shim.mjs <node 可执行> <真 CLI 脚本> %*`。
+- `dida.ps1`：一行 PowerShell 壳，`node dida-shim.mjs <node 可执行> <真 CLI 脚本> @args`。PowerShell 同目录内优先命中它，`@args` 原样展开，多行参数保真。
+- `dida.cmd`：一行 shell 壳，`node dida-shim.mjs <node 可执行> <真 CLI 脚本> %*`。执行策略拒绝脚本、或调用方显式写 `dida.cmd` 时的兜底；这一路的多行仍截断。
 - `dida-shim.mjs`：判定 + 记账 + 转发。
 - `lib/`：shim 只依赖的三个模块（`calllog.mjs`、`created.mjs`、`guard.mjs`），外加沙箱生成时烘焙的 `guard-config.mjs`（测试清单集合）。
 

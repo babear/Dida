@@ -125,7 +125,7 @@ ERULE:NAME=CUSTOM;BYDATE=20260325,20260330
 | `sortOrder` | 事项间排序 |
 | `startDate` / `isAllDay` / `timeZone` / `completedTime` | 可选的时间与完成信息 |
 
-`--items` 是整段 JSON 走一个命令行参数。Windows 单个参数上限 32767 字符，约 900 条会到顶、1000 条必失败（`ENAMETOOLONG`）。超过这个量就分批写。
+`--items` 是整段 JSON 走一个命令行参数。Windows 下 `CreateProcess` 对**整条命令行**限 32767 字符（不是单个参数），按每条约 48 字符算，约 680 条就会到顶、1000 条必失败（`ENAMETOOLONG`）。超过这个量就分批写。
 
 ## `focusSummaries[]`
 

@@ -80,7 +80,7 @@ harness 是仓库根目录下的一个 Node 模块目录，入口是一个可执
 - **会话模块**：拼装并启动 `claude -p`、清理继承的环境变量、解析 NDJSON。
 - **断言装配**：加载用例目录里的结局断言模块，算出终态快照，收集三面结果。
 - **判定模块**：起判定 agent、写质量报告与人工复核表。不影响退出码。
-- **shim**：`dida.cmd` + 一个 Node 脚本承担判定与记账。
+- **shim**：`dida.ps1` + `dida.cmd` 两份壳 + 一个 Node 脚本承担判定与记账。
 
 ### 用例目录
 
@@ -173,7 +173,7 @@ skill-tests/
 
 ### shim 规则
 
-单份 `dida.cmd`，判定与记账后原样转发给真 CLI，退出码透传。
+`dida.ps1` 与 `dida.cmd` 两份壳（PowerShell 优先命中前者，多行参数经它保真），判定与记账后原样转发给真 CLI，退出码透传。见 ADR-0013。
 
 **一条规则：解析不出目标，或目标不在测试清单集合内，就拒绝。** 没有可判定目标的写命令（`project create`、`project group *`、`habit *`、`focus *`、`tag *`、`auth login/logout/token`）同样拒绝，不默认放行。
 
