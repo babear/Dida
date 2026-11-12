@@ -162,6 +162,11 @@ function findPowerShell() {
   return cachedPowerShell;
 }
 
+// 某个 shell 是否可用；用于对 5.1 / 7 分别断言不同的已知行为。
+function hasShell(exe) {
+  return spawnSync(exe, ['-NoProfile', '-Command', '$PSVersionTable.PSVersion.Major'], { encoding: 'utf8' }).status === 0;
+}
+
 // PowerShell 里嵌路径：单引号串内的 ' 要写成 ''，否则 sandboxDir 含引号时会拼出坏脚本。
 const psLiteral = (value) => `'${value.replace(/'/g, "''")}'`;
 
@@ -202,4 +207,46 @@ PS_TEST('PowerShell 命中 .ps1：多行 --content 经沙箱 shim 到达真 CLI 
   assert.ok(fs.existsSync(observed), `真 CLI 未被调用；PowerShell stderr：${result.stderr}`);
   const argv = JSON.parse(fs.readFileSync(observed, 'utf8'));
   assert.equal(argv[argv.indexOf('--content') + 1], body, '多行正文必须原样到达真 CLI');
+});
+
+// Windows PowerShell 5.1 会吞掉空串参数：`--content ''` 到达 shim 时
+// flag 与值一起消失，整条 argv 里再也找不到 `--content`。这会打穿 #8 规则 2
+// （content 从非空变空）——判据看到的是"这次调用没传 content"，而不是"传了空的"。
+// pwsh 7 不吞。修不了（是 5.1 的参数传递行为），但要让它在测试里显形。
+function emptyContentValue(shell, t) {
+  const dir = sandboxDir(t);
+  const fakeCli = path.join(dir, 'fake-cli.mjs');
+  const observed = path.join(dir, 'observed.json');
+  fs.writeFileSync(
+    fakeCli,
+    `import fs from 'node:fs';\nfs.writeFileSync(${JSON.stringify(observed)}, JSON.stringify(process.argv.slice(2)));\n`,
+  );
+  const realCmd = path.join(dir, 'dida.cmd');
+  fs.writeFileSync(realCmd, ['@ECHO off', `"${process.execPath}" "${fakeCli}" %*`].join('\r\n'));
+  const binDir = path.join(dir, 'bin');
+  writeShim(binDir, realCmd, PROJECTS);
+
+  const script = [
+    `$env:PATH = ${psLiteral(binDir + ';')} + $env:PATH`,
+    `$env:DIDA_CALL_LOG = ${psLiteral(path.join(dir, 'calls.ndjson'))}`,
+    `$env:DIDA_CREATED_FILE = ${psLiteral(path.join(dir, 'created.ndjson'))}`,
+    `$empty = ''`,
+    // 用白名单里的清单 id，否则 shim 会以越界拒掉，假 CLI 根本不会启动
+    `dida task update t1 --id t1 --project ${PROJECTS[0]} --content $empty`,
+  ].join('; ');
+  spawnSync(shell, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script], { encoding: 'utf8' });
+  const argv = JSON.parse(fs.readFileSync(observed, 'utf8'));
+  return argv[argv.indexOf('--content') + 1];
+}
+
+PS_TEST('空串 --content：pwsh 7 保真', (t) => {
+  if (!hasShell('pwsh.exe')) return t.skip('本机没有 pwsh 7');
+  assert.equal(emptyContentValue('pwsh.exe', t), '', 'pwsh 7 必须保住空串');
+});
+
+PS_TEST('空串 --content：5.1 连 flag 一起吞掉（已知局限，锁住以便变化时报警）', (t) => {
+  if (!hasShell('powershell.exe')) return t.skip('本机没有 Windows PowerShell 5.1');
+  // 5.1 的已知行为：`--content ''` 整个消失，argv 里 findIndex 得 -1、取到 undefined。
+  // 锁在这里：哪天 5.1 变了这条会红，提醒重估 #8 规则 2 在 5.1 上的可判性。
+  assert.equal(emptyContentValue('powershell.exe', t), undefined, '5.1 吞掉 --content 与其值；若不再如此请更新 ADR-0013 与本断言');
 });

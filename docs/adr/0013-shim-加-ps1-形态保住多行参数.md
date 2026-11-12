@@ -30,12 +30,18 @@ ADR-0004 拒绝 `.ps1` 的理由是「`dida.ps1` 未签名，PowerShell 默认�
 
 `.cmd` 更窄是因为 cmd.exe 自身的输入行缓冲（8191）先于 Win32 `CreateProcess` 的 32767 触发，而 shim 壳的固定前缀已占约 250 字符。两条都不是 shim 能改的上限：前者要绕开 cmd，后者要真 CLI 支持 stdin 或文件输入，当前 `@suibiji/dida-cli@0.1.14` 不支持。
 
+### 空串参数：`@args` 的保真有一个例外
+
+`--content ''`（清空正文的写法）在 Windows PowerShell 5.1 上会连同 flag 一起消失，到达 shim 的 argv 里再也找不到 `--content`；pwsh 7 保真。`.cmd` 路径同样如此。
+
+这直接影响 #8 的过程断言规则 2：在 5.1 上「content 从非空变空」会被读成「这次调用没传 content」，判据失真。测试 `harness/lib/sandbox.test.mjs` 对这个行为两端都有断言，锁住现状。
+
 ## 决定
 
 沙箱 `bin/` 生成**两份壳**，共用同一个 `dida-shim.mjs`：
 
 - `dida.ps1`：`node "<shim>" "<program>" "<script>" @args`，退出码透传。PowerShell 优先命中它，多行参数保真。
-- `dida.cmd`：保持原样，供调用方显式写 `dida.cmd`、或用非 PowerShell 的 shell 时使用；此路多行仍截断。
+- `dida.cmd`：保持原样。它的真实职责不是入口兜底（见下），而是**继续作为 `resolveRealDidaCmd` 的解析源**——shim 靠从真 `dida.cmd` 里抠出 node 与脚本路径；agent 主动写全名时它也能工作，但多行会截断。
 
 **`.cmd` 不是执行策略的兜底。** 实测在 `AllSigned` 下，PowerShell 解析到 `.ps1` 就抛 `SecurityError`，不会回头去找同目录的 `.cmd`。之所以不禁用这条风险，是因为 claude 的 PowerShell 工具在 `CLAUDE_CODE_POWERSHELL_RESPECT_EXECUTION_POLICY` 未设时硬编码传 `-ExecutionPolicy Bypass`，且 `sanitizeEnv` 剔除全部 `CLAUDE` 开头的变量，被测会话里该开关恒为默认。若将来这个默认改变，`.ps1` 会不可用而 `.cmd` 也不会自动接上——那时要重新评估形态。
 
