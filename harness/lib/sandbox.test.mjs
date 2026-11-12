@@ -260,8 +260,28 @@ PS_TEST('`--` 经 .ps1 消失、经 .cmd 保留（已知局限，锁住以便变
   };
 
   const viaPs1 = run(`dida task delete -- ${PROJECTS[0]} t1`);
-  assert.ok(!viaPs1.includes('--'), `.ps1 应当吞掉 --，实际 ${JSON.stringify(viaPs1)}；若已修复请更新 ADR-0013 与 #29`);
+  assert.deepEqual(viaPs1, ['task', 'delete', PROJECTS[0], 't1'], '`.ps1 应当吞掉 --`；若已修复请更新 ADR-0013 与 #29');
 
   const viaCmd = run(`& ${psLiteral(path.join(binDir, 'dida.cmd'))} task delete -- ${PROJECTS[0]} t1`);
-  assert.ok(viaCmd.includes('--'), `.cmd 应当保留 --，实际 ${JSON.stringify(viaCmd)}`);
+  assert.deepEqual(viaCmd, ['task', 'delete', '--', PROJECTS[0], 't1'], '`.cmd 应当保留 --`');
+});
+
+// 值里的双引号：pwsh 7 经 .ps1 保真，5.1 剥掉。与空串那条同源（5.1 的参数传递）。
+PS_TEST('值里的双引号：pwsh 7 经 .ps1 保真，5.1 剥掉', (t) => {
+  if (!hasShell('pwsh.exe') && !hasShell('powershell.exe')) return t.skip('本机没有 PowerShell');
+  const run = (shell) => {
+    const { env, observed } = shimFixture(sandboxDir(t));
+    const call = `$c = 'say "hi"'; dida task update t1 --id t1 --project ${PROJECTS[0]} --content $c`;
+    spawnSync(shell, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', `${env}; ${call}`], { encoding: 'utf8' });
+    return JSON.parse(fs.readFileSync(observed, 'utf8'));
+  };
+
+  if (hasShell('pwsh.exe')) {
+    const argv = run('pwsh.exe');
+    assert.equal(argv[argv.indexOf('--content') + 1], 'say "hi"', 'pwsh 7 应保留双引号');
+  }
+  if (hasShell('powershell.exe')) {
+    const argv = run('powershell.exe');
+    assert.equal(argv[argv.indexOf('--content') + 1], 'say hi', '5.1 会剥掉双引号；若不再如此请更新 ADR-0013 与本断言');
+  }
 });

@@ -47,11 +47,11 @@ pwsh 7 两种都保真。`.cmd` 路径与 5.1 相同。
 
 `dida task delete -- <projectId> <taskId>` 经 `.ps1` 到达 shim 时 `--` 不见了（`.cmd` 保留）。PowerShell 把 `--` 当自己的参数终止符吃掉，5.1 与 pwsh 7 都一样。
 
-后果：`guard.mjs` 复刻的 commander 语义「`--` 之后一律当位置参数」在真实路径上永远收不到。它自己的单测直接调 `decide()`，不经过这一层，所以抓不到。与多行截断同类，是「参数在到达 shim 之前被破坏」的另一种形态，修复归 #29。
+后果：`guard.mjs` 复刻的 commander 语义「`--` 之后一律当位置参数」在真实路径上永远收不到。它自己的单测直接调 `decide()`，不经过这一层，所以抓不到。与多行截断同类，是「参数在到达 shim 之前被破坏」的另一种形态，**在 #29 处理**（#29 的边界已据此修订，把 `.ps1` 入口一并纳入）。
 
-### 值里的双引号被剥掉
+### 值里的双引号：只有 5.1 剥掉
 
-`--content 'say "hi"'` 到达 shim 时变成 `say hi`，两条入口都一样。这是 PowerShell 自身的引号处理，不是 `.ps1` 独有。
+`--content 'say "hi"'` 经 `.ps1` 到达 shim 时：pwsh 7 保真 `say "hi"`，powershell.exe 5.1 剥成 `say hi`。`.cmd` 路径同样剥（cmd 的引号处理）。
 
 ## 决定
 
