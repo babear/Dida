@@ -3,9 +3,9 @@ import { readCreated } from './created.mjs';
 // 真 CLI 的错误路径有两种形状，都要能分辨：
 //   1. stdout 为空、错误在 stderr、退出码非零（API 失败）
 //   2. stdout 是合法 JSON、退出码非零（错误路径上多带一行 libuv 断言）
-// 所以先试解析；解析不出来再看退出码——非零就抛，否则才是真空清单。
-// 反过来「退出码非零就抛」会把形状 2 误判成失败，而「解析失败就当空」会让
-// 形状 1 静默变成"这个清单里没有任务"，清场会以为自己删干净了。
+// 所以先试解析；解析不出来就是坏输出，直接抛——非空却解析不了，退出码是 0
+// 也一样：当空清单处理会让清场以为自己删干净了，而任务还在。
+// 反过来「退出码非零就抛」会把形状 2 误判成失败。
 export function listTasks(dida, projectId) {
   const result = dida.run(['task', 'filter', '--projects', projectId, '--json']);
   const text = (result.stdout ?? '').trim();
@@ -13,7 +13,9 @@ export function listTasks(dida, projectId) {
     try {
       return JSON.parse(text);
     } catch {
-      // 落到下面按退出码判
+      // 非空却解析不出：不管退出码是多少都是坏输出，当作失败。
+      // 当空清单处理会让清场以为自己删干净了，而任务还在。
+      throw new Error(`列清单 ${projectId} 的输出不是合法 JSON：${text.slice(0, 200)}`);
     }
   }
   if (result.exitCode !== 0) {
