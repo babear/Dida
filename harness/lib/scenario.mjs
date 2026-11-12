@@ -25,6 +25,7 @@ export function loadScenario(repoRoot, id) {
   const materialsDir = path.join(dir, 'materials');
   return {
     id,
+    dir,
     prompt: manifest.prompt,
     materialsDir: fs.existsSync(materialsDir) ? materialsDir : null,
   };

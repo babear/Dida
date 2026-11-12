@@ -82,6 +82,11 @@ export function buildSessionArgv({ prompt, agentsPath }) {
   ];
 }
 
+// 会话是否正常收尾。终态不可归因时断言不评、清场延后、沙箱保留，三处都问这个。
+export function sessionCompleted(session) {
+  return session.exitCode === 0 && !session.timedOut;
+}
+
 export function runSession({ argv, cwd, env, transcriptPath }) {
   return new Promise((resolve, reject) => {
     const out = fs.createWriteStream(transcriptPath, { flags: 'w' });

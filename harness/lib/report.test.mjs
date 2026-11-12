@@ -5,7 +5,7 @@ import { renderHeader, renderReport, renderSummary } from './report.mjs';
 
 const MANIFEST = {
   run: '2026-11-07T09-00-00-000Z-ab12cd',
-  scenario: 's1-plan-to-task',
+  scenario: 'example-scenario',
   sandbox: 'C:\\Users\\Charles\\AppData\\Local\\Temp\\run-2026-11-07T09-00-00-000Z-ab12cd',
   skill: {
     source: 'E:\\repo\\skills\\dida-cli',
@@ -161,7 +161,41 @@ test('没有写命令被拒时不写这一行', () => {
 
 test('摘要给人读：一段话说完这次测了什么、跑了多少、建了什么', () => {
   const summary = renderSummary(MANIFEST);
-  assert.match(summary, /s1-plan-to-task/);
+  assert.match(summary, /example-scenario/);
   assert.match(summary, /14/);
   assert.match(summary, /1 条/);
+});
+
+test('报告带判定小节，断言失败时报告里就能读到失败项', () => {
+  const report = renderReport({
+    ...MANIFEST,
+    assertion: { status: 'failed', results: [{ ok: false, name: '父任务正文非空', expected: '非空', actual: '（空）' }] },
+  });
+  assert.match(report, /## 判定/);
+  assert.match(report, /结局断言 未通过/);
+  assert.match(report, /父任务正文非空/);
+});
+
+test('断言模块坏掉（broken）但会话跑过时，报告仍要写清场——残留任务就藏在这一段里', () => {
+  const report = renderReport({
+    ...MANIFEST,
+    assertion: { status: 'broken', detail: '断言模块没能给出结果数组', results: [] },
+    cleanup: { deleted: [], failed: [], remaining: ['aaaa00000000000000000009'], mismatched: [] },
+  });
+  assert.match(report, /## 判定/);
+  assert.match(report, /## 清场/);
+  assert.match(report, /aaaa00000000000000000009/, '删完仍在清单里的任务必须点名');
+  assert.match(report, /周末露营/, '本次创建的任务表也要在');
+});
+
+test('没开会话的运行（缺断言）只写判定，不写清场与模型', () => {
+  const report = renderReport({
+    run: 'r1',
+    scenario: 's1',
+    assertion: { status: 'missing', results: [] },
+    session: {},
+  });
+  assert.match(report, /缺断言/);
+  assert.doesNotMatch(report, /## 清场/);
+  assert.doesNotMatch(report, /## 模型/);
 });

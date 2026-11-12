@@ -6,14 +6,16 @@ import { fileURLToPath } from 'node:url';
 
 import { createSandbox, resolveRealDidaCmd, SKILL_NAME } from './lib/sandbox.mjs';
 import { parseCmdShim } from './lib/shim.mjs';
-import { buildSessionArgv, runSession, parseTranscript, sanitizeEnv, summarizeTranscript } from './lib/session.mjs';
+import { buildSessionArgv, runSession, parseTranscript, sanitizeEnv, sessionCompleted, summarizeTranscript } from './lib/session.mjs';
 import { defaultSettingsPath, ensureRunsDir, gitState, modelInfo, runId } from './lib/provenance.mjs';
 import { listScenarios, loadScenario } from './lib/scenario.mjs';
+import { decideAssertion, loadAssert } from './lib/assertion.mjs';
+import { buildState } from './lib/state.mjs';
 import { crossCheck, outOfBoundsCalls, parseCallLog, rejectedCalls } from './lib/calllog.mjs';
 import { readCreated } from './lib/created.mjs';
 import { cleanRun } from './lib/cleanup.mjs';
 import { resolveTestProjects } from './lib/projects.mjs';
-import { renderReport } from './lib/report.mjs';
+import { formatValue, renderReport } from './lib/report.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const AGENTS_SOURCE_PATH = path.join(repoRoot, 'harness', 'agents.json');
@@ -96,8 +98,8 @@ function reportCleanup(cleanup, run) {
   }
 }
 
-async function runOne(options, id, projects) {
-  const scenario = loadScenario(repoRoot, id);
+async function runOne(options, scenario, projects, assertionFn) {
+  const id = scenario.id;
   const runKey = runId();
   const runsDir = ensureRunsDir(repoRoot);
   const runDir = path.join(runsDir, runKey);
@@ -132,7 +134,46 @@ async function runOne(options, id, projects) {
   const summary = summarizeTranscript(events);
   const git = gitState(repoRoot);
   const sourceEnv = sandbox.anthropicEnv;
+  const created = readCreated(createdFile);
   const calls = fs.existsSync(callLogPath) ? parseCallLog(fs.readFileSync(callLogPath, 'utf8')) : [];
+
+  // 终态快照在清场之前取：清场删的正是这些任务，删完再取只能拿到 null。
+  // 快照落盘供重放（用户故事 43）：断言改了之后不必再烧一次 API。
+  // 取快照要枚举清单一，那一步失败不能带走整次运行——下面的 manifest 与清场
+  // 必须照常执行，否则任务建在真实清单里却没人删。
+  const statePath = path.join(runDir, 'state.json');
+  let state = [];
+  let stateFailed = false;
+  let stateError = null;
+  try {
+    state = buildState({ dida: realDida(), created, projects });
+  } catch (error) {
+    // 用布尔表示「失败」，不靠 message 的真假：空格错误消息的 error 会让
+    // 标志变 falsy，于是写下空的 state.json 并让断言在 [] 上判 FAILED。
+    stateFailed = true;
+    stateError = error.message || String(error);
+  }
+  // 取不到快照时不写 state.json：写一份空数组会让人以为「这次一条任务都没有」，
+  // 重放时读出的是假事实。文件缺失才是诚实的。
+  if (!stateFailed) fs.writeFileSync(statePath, JSON.stringify(state, null, 2));
+
+  const sessionInfo = {
+    exitCode: session.exitCode,
+    timedOut: session.timedOut,
+    turns: summary.turns,
+    costUsd: summary.costUsd,
+  };
+  const completed = sessionCompleted(session);
+
+  // 三类结局的分界见 decideAssertion 的注释：用例缺陷判 broken、不可归因判 invalid、
+  // 没做到判 failed。判定本身不抛错，下面的 manifest 与清场总执行。
+  const assertion = await decideAssertion({
+    completed,
+    stateFailed,
+    stateError,
+    assertionFn,
+    input: { tasks: state, created, calls, session: sessionInfo },
+  });
 
   const manifest = {
     run: runKey,
@@ -163,7 +204,10 @@ async function runOne(options, id, projects) {
       outOfBounds: outOfBoundsCalls(calls).length,
       crossCheck: crossCheck(calls, summary.toolCalls),
     },
-    created: readCreated(createdFile),
+    created,
+    // count 为 null 表示没取到快照，与「取到了、0 条」区分开。
+    state: { path: statePath, count: stateFailed ? null : state.length, error: stateError },
+    assertion,
     testProjects: projects,
     callerMarker: sandbox.callerMarker,
   };
@@ -171,12 +215,58 @@ async function runOne(options, id, projects) {
   return { run: runKey, runDir, sandbox, manifest, session, createdFile };
 }
 
-function writeManifest(runDir, manifest) {
-  fs.writeFileSync(path.join(runDir, 'manifest.json'), JSON.stringify(manifest, null, 2));
+// manifest 里带着断言模块返回的原值，那些值不受我们控制：循环引用、BigInt 都会让
+// JSON.stringify 抛错。它抛在这里意味着清场还没跑——任务会留在真实清单里没人删。
+// 所以先照常序列化；真抛了才降级，把环与 BigInt 一起折成占位串。
+// 不预先做替换：JSON.stringify 的 replacer 拿不到「子树结束」的回调，用祖先链
+// 会把同一对象在两个兄弟字段里各出现一次（expected 与 actual 指向同一份）误判成环。
+function safeStringify(value) {
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    const onPath = new WeakSet();
+    const substitute = (entry) => {
+      if (typeof entry === 'bigint') return `${entry}n`;
+      if (!entry || typeof entry !== 'object') return entry;
+      if (onPath.has(entry)) return '[循环引用]';
+      onPath.add(entry);
+      const out = Array.isArray(entry)
+        ? entry.map(substitute)
+        : Object.fromEntries(Object.entries(entry).map(([k, v]) => [k, substitute(v)]));
+      // 只在「当前这条递归路径上」判环：兄弟字段共享同一对象是正常数据，不能标成环。
+      onPath.delete(entry);
+      return out;
+    };
+    return JSON.stringify(substitute(value), null, 2);
+  }
+}
+
+export function writeManifest(runDir, manifest) {
+  fs.writeFileSync(path.join(runDir, 'manifest.json'), safeStringify(manifest));
 }
 
 function writeReport(runDir, manifest) {
   fs.writeFileSync(path.join(runDir, 'report.md'), `${renderReport(manifest)}\n`);
+}
+
+// 用例配置错误也要留下报告：AC 要求报告里能读到原因，而不只是 stderr 一行。
+// 不建沙箱、不开会话，只落一份最小 manifest 与报告。
+export function writeUnusableRun(repoRoot, id, { skillPath, status, detail }) {
+  const runKey = runId();
+  const runDir = path.join(ensureRunsDir(repoRoot), runKey);
+  fs.mkdirSync(runDir, { recursive: true });
+  const manifest = {
+    run: runKey,
+    scenario: id,
+    skill: { source: skillPath },
+    assertion: { status, detail, results: [] },
+    created: [],
+    calls: {},
+    session: {},
+  };
+  writeManifest(runDir, manifest);
+  writeReport(runDir, manifest);
+  return { runKey, runDir };
 }
 
 async function main() {
@@ -229,10 +319,46 @@ async function main() {
 
   let failures = 0;
   for (const id of ids) {
-    const { run, runDir, sandbox, manifest, session, createdFile } = await runOne(options, id, projects);
-    const sessionCompleted = session.exitCode === 0 && !session.timedOut;
+    // 缺 assert.mjs 不开会话：两个目录（scenarios/ 与 probes/）的区分就是有没有断言，
+    // 跳过会让漏写的用例静默退出回归网、退出码仍是 0。这是用例配置错误，不是断言未通过。
+    // loadScenario 单独拿出来：--scenario 写错 id 要报「找不到」，不能混成缺断言。
+    let scenario;
+    try {
+      scenario = loadScenario(repoRoot, id);
+    } catch (error) {
+      console.error(`NOT FOUND ${id}  ${error.message}`);
+      failures += 1;
+      continue;
+    }
+    let assertionFn;
+    try {
+      assertionFn = await loadAssert(scenario.dir);
+    } catch (error) {
+      const { runKey, runDir } = writeUnusableRun(repoRoot, id, {
+        skillPath: options.skillPath,
+        status: 'broken',
+        detail: error.message,
+      });
+      console.error(`MISCONFIGURED ${id}  断言模块加载失败：${error.message}（报告 ${path.relative(repoRoot, runDir)}，run=${runKey}）`);
+      failures += 1;
+      continue;
+    }
+    if (!assertionFn) {
+      const assertPath = path.join(scenario.dir, 'assert.mjs');
+      const { runKey, runDir } = writeUnusableRun(repoRoot, id, {
+        skillPath: options.skillPath,
+        status: 'missing',
+        detail: `缺 ${assertPath}`,
+      });
+      console.error(`MISCONFIGURED ${id}  缺断言：${path.relative(repoRoot, assertPath)}（报告 ${path.relative(repoRoot, runDir)}，run=${runKey}）`);
+      failures += 1;
+      continue;
+    }
 
-    const retained = !sessionCompleted || options.keepSandbox || options.hold;
+    const { run, runDir, sandbox, manifest, session, createdFile } = await runOne(options, scenario, projects, assertionFn);
+    const completed = sessionCompleted(session);
+
+    const retained = !completed || options.keepSandbox || options.hold;
 
     // 先把会话事实落盘，再动清单：清场读账本出错时，manifest 与 report 必须已经在了。
     writeManifest(runDir, { ...manifest, cleanup: null, sandboxRetained: retained });
@@ -240,7 +366,7 @@ async function main() {
     // 只按账本删。会话没正常结束时连任务一起保留现场，由 --clean 显式收尾。
     let cleanup;
     try {
-      cleanup = options.hold || !sessionCompleted
+      cleanup = options.hold || !completed
         ? emptyCleanup({ deferred: true })
         : cleanRun({ dida: realDida(), projects, createdFile });
     } catch (error) {
@@ -254,19 +380,37 @@ async function main() {
     // 清场失败只记 log 不中断：每条 scenario 的账本按 runId 隔离，删不掉自己的那几条
     // 不会影响下一条的判断。退出码仍非零，让人知道有现场要收。
     const cleanupProblem = hasCleanupProblem(cleanup);
-    if (!sessionCompleted || cleanupProblem) failures += 1;
+    // 除 passed 外都要非零：failed 是 skill 有缺陷，broken 是用例有缺陷，
+    // invalid 是结果不可归因——三者都要人看一眼，不能安静地算通过。
+    if (!completed || cleanupProblem || manifest.assertion.status !== 'passed') failures += 1;
 
-    console.log(`${sessionCompleted ? 'COMPLETED' : 'INCOMPLETE'} ${id}  run=${run}`);
+    const verdict = {
+      passed: 'PASSED',
+      skipped: 'INCOMPLETE',
+      failed: 'FAILED',
+      broken: 'BROKEN',
+      invalid: 'INVALID',
+    }[manifest.assertion.status];
+    console.log(`${verdict} ${id}  run=${run}`);
     console.log(`  skill sha256=${manifest.skill.sha256.slice(0, 16)} files=${manifest.skill.files} git=${manifest.skill.git.rev?.slice(0, 12)}${manifest.skill.git.dirty ? ' (dirty)' : ''}`);
     console.log(`  model alias=${manifest.model.requested_alias} provider=${manifest.model.provider}（别名不等于实际执行模型，真实映射见 manifest.model.alias_mapping）`);
     console.log(`  sandbox=${sandbox.root}${retained ? ' (retained)' : ' (removed)'}`);
     console.log(`  transcript=${path.relative(repoRoot, manifest.transcript.path)} events=${manifest.transcript.events} toolCalls=${manifest.transcript.toolCalls}`);
     console.log(`  calls=${path.relative(repoRoot, manifest.calls.path)} total=${manifest.calls.total} rejected=${manifest.calls.rejected} outOfBounds=${manifest.calls.outOfBounds}`);
     console.log(`  created=${manifest.created.length} 条${manifest.created.length ? '：' + manifest.created.map((e) => e.id).join('、') : ''}`);
+    console.log(manifest.state.error
+      ? `  state=未落盘（${manifest.state.error}）`
+      : `  state=${path.relative(repoRoot, manifest.state.path)}（${manifest.state.count} 条）`);
+    // invalid 的失败项指向 harness 自己（快照取不到），不是断言不通过——措辞要分开，
+    // 否则控制台会把一次基础设施故障读成 skill 缺陷。
+    for (const result of manifest.assertion.results.filter((r) => !r.ok)) {
+      const label = manifest.assertion.status === 'invalid' ? '结果不可归因' : '断言未通过';
+      console.error(`    ${label} ${result.name}：期望 ${formatValue(result.expected)}，实际 ${formatValue(result.actual)}`);
+    }
     reportCleanup(cleanup, run);
     console.log(`  caller marker=${manifest.callerMarker}`);
     console.log(`  run dir=${path.relative(repoRoot, runDir)}`);
-    if (!sessionCompleted) console.log(`  session exit=${session.exitCode} timedOut=${session.timedOut}`);
+    if (!completed) console.log(`  session exit=${session.exitCode} timedOut=${session.timedOut}`);
   }
 
   if (failures > 0) process.exitCode = 1;

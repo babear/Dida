@@ -9,7 +9,7 @@ node harness/run.mjs --scenario <id>
 npm run test:harness  # harness 自己的单元测试，不烧 API
 ```
 
-`npm run test:harness` 跑与被测文件同目录的 `*.test.mjs`。跑 scenario 要真实 API 会话，没有 `npm test` 别名——等 #7 加回 `s1-plan-to-task` 再恢复。
+`npm run test:harness` 跑与被测文件同目录的 `*.test.mjs`。`npm run test:scenarios` 跑 `skill-tests/` 下的用例自检（断言的构造数据测试，不烧 API）。跑 scenario 本身要真实 API 会话，别名归 #9。
 
 | 参数 | 默认 | 作用 |
 |---|---|---|
@@ -20,7 +20,7 @@ npm run test:harness  # harness 自己的单元测试，不烧 API
 | `--hold` | 关 | 跑完不清场，留现场给人看；之后用 `--clean <runId>` 收尾 |
 | `--clean <runId>` | — | 只按该 run 的 `created.ndjson` 删除任务，然后退出 |
 
-退出码：任一会话非零退出或超时即 1；清场中止或删除失败也是 1。
+退出码：任一 scenario 断言未通过、会话非零退出或超时、用例配置错误（缺 `assert.mjs`，或断言模块加载失败、没给出合法结果）、终态快照取不到、清场中止或删除失败，都是 1。
 
 ### 清场纪律
 
@@ -52,11 +52,11 @@ npm run test:harness  # harness 自己的单元测试，不烧 API
 | `scenario.json` | `prompt`，唯一给 agent 的文本输入 | 是 | 已有 |
 | `materials/` | 可选，整体复制进沙箱 `materials/` | 是 | 已有 |
 | `preset.mjs` | 可选，声明要建的任务，会话前由 harness 用真 CLI 执行 | 否 | 未实现 |
-| `assert.mjs` | 结局断言，默认导出 `{tasks, created, calls, session} => 结果数组` | 否 | #7 |
+| `assert.mjs` | 结局断言，默认导出 `{tasks, created, calls, session} => 结果数组` | 否 | 已有 |
 
 加一条 scenario 就是加一个目录，harness 一行不用改（前提是 `assert.mjs` 与 `preset.mjs` 已实现）。目录形态与三面判定的完整理由见 ADR-0012。
 
-**只有 `scenario.json` 与 `materials/` 现在能跑。** `assert.mjs` 归 #7，`preset.mjs` 归 #19，探针与终态快照归 #20。在那之前，目录里放了它们也不会被执行。
+**`scenario.json`、`materials/` 与 `assert.mjs` 现在能跑。** `preset.mjs` 归 #19，探针归 #20。在那之前，目录里放 `preset.mjs` 不会被执行。
 
 `preset.mjs` 建前置数据时从 harness 拿到**本次 run 的清单**，不是仓库里的默认常量——用默认常量会在环境变量覆盖时建到清场的视野外，成为删不掉的孤儿。校验规则见 ADR-0012：目标清单必须 ∈ 本次清单集合；指向已有任务的参数（`--parent-id`、`task update --id` 等）与 `--help` 这类空操作一律拒绝。它建出的任务立刻记进本 run 的账本，和 shim 记的是同一份。
 
@@ -74,9 +74,19 @@ npm run test:harness  # harness 自己的单元测试，不烧 API
 
 1. **可信度检查**：调用日志条数少于轨迹里的命令调用数，说明有调用绕过 shim。失败标 `invalid` 而非 `fail`——退出码同样非零，但语义是"重跑"。见 ADR-0012。
 2. **过程断言**：调用日志 argv 序列上的三条硬规则，见 ADR-0005。第 3 条（越界写入）现由 shim 当场拒绝并记 `rejected`，只需接进判定。
-3. **结局断言**：读终态快照 `runs/<runId>/state.json`——账本里每个 id 按 `task get --json` 取回的任务现状，取不到的记 `null`。
+3. **结局断言**：读终态快照 `runs/<runId>/state.json`——账本里每个 id 取回的任务现状，取不到的记 `null`。定位与清场同一套：先按测试清单枚举再按 id 找，因为 agent 可能用 `task move` 挪走任务；枚举不到才回退到账本记的 `projectId` 直查。
 
-**当前判定口径**：只看会话是否正常退出（`COMPLETED` / `INCOMPLETE`）。三面判定接上之后才构成 scenario 的通过或失败。
+**当前判定口径**：会话正常结束（`PASSED` / `FAILED` / `INCOMPLETE`）+ 结局断言。除 `PASSED` 外退出码都是 1。
+
+| 结果 | 含义 | 怎么修 |
+|---|---|---|
+| `FAILED` | 断言未通过，skill 没做到 | 改 skill |
+| `BROKEN` | 断言模块没给出合法结果（抛异常、返回非数组、元素缺布尔 `ok`、稀疏数组），用例有缺陷 | 改用例 |
+| `INVALID` | 终态快照取不到，结果不可归因 | 重跑 |
+| `MISCONFIGURED` | 缺 `assert.mjs`，不开会话但仍落一份只含判定的报告 | 补用例，或移到 `probes/` |
+| `NOT FOUND` | `--scenario` 写错 id | 改正 id |
+
+可信度检查与过程断言分别归 #8 与 #18。
 
 ## 沙箱
 
@@ -155,8 +165,9 @@ run-<runId>/
 | `trace.ndjson` | 被测会话的原始轨迹 |
 | `calls.ndjson` | shim 记下的调用序列，每行 `{argv, at, decision}`；被拒的另有 `reason` 与 `targets` |
 | `created.ndjson` | 本 run 建成并立刻记账的任务，一行一条；清场与断言都只认这一份 |
+| `state.json` | 终态快照：账本里每个 id 取回的现状，取不到的记 `null`。按测试清单枚举定位，枚举不到才回退账本的 `projectId`。断言读它。列清单失败时不写这个文件（不写比写空数组诚实） |
 | `manifest.json` | 沙箱绝对路径、skill 指纹与文件数、git rev 与 dirty、三层模型信息、工具面、轮数、成本、调用数、创建数、清场结果、标记 |
-| `report.md` | 给人读的报告：首行是 skill 指纹 / 模型 / 沙箱路径，中间是本次创建的任务 id 表，末尾是摘要 |
+| `report.md` | 给人读的报告：首行是 skill 指纹 / 模型 / 沙箱路径，接着是判定结论与落败的断言，中间是本次创建的任务 id 表，末尾是摘要 |
 
 `runs/` 已在 `.gitignore` 里。
 

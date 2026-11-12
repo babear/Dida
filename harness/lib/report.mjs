@@ -1,3 +1,5 @@
+import { sessionCompleted } from './session.mjs';
+
 // 首行只放前 12 位：够区分一次改动，又不至于长得没法读。
 function short(value) {
   return value ? value.slice(0, 12) : 'unknown';
@@ -29,9 +31,85 @@ function cost(costUsd) {
   return typeof costUsd === 'number' ? costUsd.toFixed(4) : '?';
 }
 
+// 期望值与实际值可能是对象（`{kind: 'TEXT'}`），直接拼进字符串会变成 [object Object]，
+// 而这条报告的全部意义就是让人一眼看出差在哪。控制台输出也走这一个，两处口径一致。
+// 序列化会失败的值（循环引用、BigInt）折成一句人话：这是报告里的一行字，不该让整次运行崩掉。
+export function formatValue(value) {
+  if (value === undefined) return '（未给出）';
+  if (value === '') return '（空）';
+  if (typeof value !== 'string') {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return `（无法序列化：${typeof value}）`;
+    }
+  }
+  return value;
+}
+
+export function renderAssertions(results) {
+  return results
+    .filter((result) => !result.ok)
+    .map((result) => `- ${result.name}：期望 ${formatValue(result.expected)}，实际 ${formatValue(result.actual)}`)
+    .join('\n');
+}
+
+const VERDICT_HEADING = '## 判定';
+
+// broken 与 invalid 的报告形状一样：一句标题、一句原因、可选的失败项明细。
+// 区别只在措辞指向「改用例」还是「重跑」。
+function detailBlock(title, detail, results) {
+  const lines = [VERDICT_HEADING, '', `**${title}**`, '', detail];
+  if (results?.length) lines.push('', renderAssertions(results));
+  return lines.join('\n');
+}
+
+export function renderVerdict({ assertion, session }) {
+  const lines = [VERDICT_HEADING, ''];
+  if (assertion?.status === 'missing') {
+    lines.push('**用例配置错误：缺断言**', '');
+    lines.push('`scenarios/<id>/` 里没有 `assert.mjs`，本次没有开会话。补上断言，或把用例移到 `probes/`。');
+    return lines.join('\n');
+  }
+  if (assertion?.status === 'broken') {
+    // 用例自己的问题：断言模块坏了、没给出结果数组。修用例，不用改 skill。
+    return detailBlock('用例配置错误：断言没给出结果', assertion.detail ?? '断言模块没能给出结果数组。', assertion.results);
+  }
+  if (assertion?.status === 'invalid') {
+    // 结果不可归因：重跑，不当作 skill 缺陷（ADR-0012）。
+    return detailBlock('本次结果不可归因，需重跑', assertion.detail ?? '', assertion.results);
+  }
+  if (!sessionCompleted(session ?? {})) {
+    return `${VERDICT_HEADING}\n\n会话未正常结束，不评断言（见「会话」小节的退出码）。`;
+  }
+  if (assertion?.status === 'failed') {
+    lines.push('**结局断言 未通过**', '', renderAssertions(assertion.results ?? []));
+    return lines.join('\n');
+  }
+  // 只有明确的 passed 才写通过：旧 manifest（--clean 会重渲染）没有 assertion 字段，
+  // 落到这里写「通过」等于给一次没评过的运行发绿灯。
+  if (assertion?.status === 'passed') {
+    lines.push('结局断言 通过');
+    return lines.join('\n');
+  }
+  lines.push('未评断言（这份 manifest 没有断言结果，可能是旧版本运行）');
+  return lines.join('\n');
+}
+
 export function renderReport(manifest) {
   const created = manifest.created ?? [];
   const cleanup = manifest.cleanup ?? { deleted: [], failed: [], remaining: [], mismatched: [] };
+  // 只按「有没有开会话」短路，不按 broken：断言模块坏掉时会话照常跑完了，
+  // 任务也建了、也清了——那种运行恰恰最需要看清单与清场结果。
+  // writeUnusableRun 写的 manifest 没有 session 记录，是真正的「没跑起来」。
+  const ranSession = manifest.session && Object.keys(manifest.session).length > 0;
+  if (!ranSession) {
+    return [
+      `# ${manifest.scenario} · ${manifest.run}`,
+      '',
+      renderVerdict({ assertion: manifest.assertion, session: {} }),
+    ].join('\n');
+  }
   // 首行就是三个事实，人打开报告第一眼就能回答"测的是哪份 skill、哪个模型、沙箱在哪"。
   const lines = [
     renderHeader(manifest),
@@ -40,6 +118,8 @@ export function renderReport(manifest) {
     '## 本次创建的任务',
     '',
     created.length === 0 ? '（没有创建任何任务）' : taskTable(created),
+    '',
+    renderVerdict({ assertion: manifest.assertion, session: manifest.session }),
     '',
     '## 清场',
     '',

@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { cleanRun, planCleanup, snapshotProjects } from './cleanup.mjs';
+import { cleanRun, listTasks, planCleanup, snapshotProjects } from './cleanup.mjs';
 
 function tmpFile(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cleanup-test-'));
@@ -139,4 +139,35 @@ test('snapshotProjects 按清单各读一次', () => {
   assert.deepEqual(snapshot[P1].map((t) => t.id), [OWN]);
   assert.deepEqual(snapshot[P2], []);
   assert.equal(dida.calls.filter((c) => c[1] === 'filter').length, 2);
+});
+
+test('退出码非零但 stdout 是合法 JSON 时照样收下（真 CLI 错误路径带 libuv 断言）', () => {
+  const dida = {
+    run: () => ({ stdout: JSON.stringify([{ id: OWN }]), stderr: 'Assertion failed: …', exitCode: 1 }),
+  };
+  assert.deepEqual(listTasks(dida, P1).map((t) => t.id), [OWN]);
+});
+
+test('stdout 不是合法 JSON 时抛错，并带上原文', () => {
+  const dida = { run: () => ({ stdout: 'DIDA API 错误 500', stderr: '网络抖动', exitCode: 1 }) };
+  assert.throws(() => listTasks(dida, P1), /不是合法 JSON/);
+});
+
+test('退出码 0 但 stdout 解析不了时同样抛错，不能当成空清单', () => {
+  // 当空清单处理会让清场以为自己删干净了：deleted=0、hasCleanupProblem=false、退出码 0，
+  // 而任务还留在真实清单里。
+  const dida = { run: () => ({ stdout: 'Warning: something\n[]', stderr: '', exitCode: 0 }) };
+  assert.throws(() => listTasks(dida, P1), /不是合法 JSON/);
+});
+
+test('真 CLI 的失败形状（stdout 空、错误在 stderr、退出码 1）必须抛错，不能当成空清单', () => {
+  // 当成空清单会让清场以为自己删干净了：deleted=[]、hasCleanupProblem=false、退出码 0，
+  // 而任务还留在真实清单里。这正是 README 记录的真 CLI 失败形态。
+  const dida = { run: () => ({ stdout: '', stderr: 'DIDA API 错误 500: boom', exitCode: 1 }) };
+  assert.throws(() => listTasks(dida, P1), /DIDA API 错误 500/);
+});
+
+test('退出码 0 且 stdout 为空才是真的空清单', () => {
+  const dida = { run: () => ({ stdout: '', stderr: '', exitCode: 0 }) };
+  assert.deepEqual(listTasks(dida, P1), []);
 });
