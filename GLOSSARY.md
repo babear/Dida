@@ -85,7 +85,7 @@ _Avoid_: 初始化、fixture、setup
 _Avoid_: 试验、试跑、probe 模式
 
 **终态快照**:
-`runs/<runId>/state.json`，账本里每个 id 取回的任务现状，取不到的记 `null`；按测试清单枚举定位、不信账本记的 `projectId`，在清场之前取，供结局断言读，也供断言改了之后重放。
+`runs/<runId>/state.json`，账本里每个 id 取回的任务现状，取不到的记 `null`；按测试清单枚举定位，枚举不到才回退到账本的 `projectId` 直查，在清场之前取，供结局断言读，也供断言改了之后重放。
 _Avoid_: 状态文件、快照
 
 **复现价**:

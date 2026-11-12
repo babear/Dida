@@ -91,9 +91,11 @@ export function renderVerdict({ assertion, session }) {
 export function renderReport(manifest) {
   const created = manifest.created ?? [];
   const cleanup = manifest.cleanup ?? { deleted: [], failed: [], remaining: [], mismatched: [] };
-  // 用例没跑起来（缺断言 / 断言模块坏了）时没有会话，报告里只剩判定：
-  // 写会话、模型、清场会让读者以为跑过。
-  if (manifest.assertion?.status === 'missing' || manifest.assertion?.status === 'broken') {
+  // 只按「有没有开会话」短路，不按 broken：断言模块坏掉时会话照常跑完了，
+  // 任务也建了、也清了——那种运行恰恰最需要看清单与清场结果。
+  // writeUnusableRun 写的 manifest 没有 session 记录，是真正的「没跑起来」。
+  const ranSession = manifest.session && Object.keys(manifest.session).length > 0;
+  if (!ranSession) {
     return [
       `# ${manifest.scenario} · ${manifest.run}`,
       '',

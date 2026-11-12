@@ -25,8 +25,6 @@ const INPUT = {
   session: { exitCode: 0 },
 };
 
-// --- loadAssert ---
-
 test('用例目录里有 assert.mjs 时加载它的默认导出', async (t) => {
   const dir = writeAssert(t, 'export default function assert() { return [{ ok: true, name: "x" }]; }\n');
   const fn = await loadAssert(dir);
@@ -37,8 +35,6 @@ test('用例目录里有 assert.mjs 时加载它的默认导出', async (t) => {
 test('缺 assert.mjs 时返回 null——调用方据此判「缺断言」而不是开跑', async (t) => {
   assert.equal(await loadAssert(tmpDir(t)), null);
 });
-
-// --- runAssert ---
 
 test('断言函数原样收到 tasks / created / calls / session', async (t) => {
   const dir = writeAssert(
@@ -85,8 +81,6 @@ test('元素缺布尔 ok 时也算形状不对', async () => {
   assert.equal(results[0].ok, false);
   assert.match(results[0].name, /形状不对/);
 });
-
-// --- decideAssertion：三类的分界 ---
 
 test('会话没正常结束 → skipped，断言不评', async () => {
   const out = await decideAssertion({ completed: false, stateError: null, assertionFn: () => { throw new Error('不该被调用'); }, input: INPUT });

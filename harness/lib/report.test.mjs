@@ -175,3 +175,27 @@ test('报告带判定小节，断言失败时报告里就能读到失败项', ()
   assert.match(report, /结局断言 未通过/);
   assert.match(report, /父任务正文非空/);
 });
+
+test('断言模块坏掉（broken）但会话跑过时，报告仍要写清场——残留任务就藏在这一段里', () => {
+  const report = renderReport({
+    ...MANIFEST,
+    assertion: { status: 'broken', detail: '断言模块没能给出结果数组', results: [] },
+    cleanup: { deleted: [], failed: [], remaining: ['aaaa00000000000000000009'], mismatched: [] },
+  });
+  assert.match(report, /## 判定/);
+  assert.match(report, /## 清场/);
+  assert.match(report, /aaaa00000000000000000009/, '删完仍在清单里的任务必须点名');
+  assert.match(report, /周末露营/, '本次创建的任务表也要在');
+});
+
+test('没开会话的运行（缺断言）只写判定，不写清场与模型', () => {
+  const report = renderReport({
+    run: 'r1',
+    scenario: 's1',
+    assertion: { status: 'missing', results: [] },
+    session: {},
+  });
+  assert.match(report, /缺断言/);
+  assert.doesNotMatch(report, /## 清场/);
+  assert.doesNotMatch(report, /## 模型/);
+});

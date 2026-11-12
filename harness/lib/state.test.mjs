@@ -9,7 +9,7 @@ const A = 'aaaa00000000000000000001';
 const B = 'bbbb00000000000000000002';
 
 // 假 CLI：filter 按清单返回任务，get 按 id 查；取不到时与真 CLI 同形——stdout 为空。
-function fakeDida(tasksByProject, { getThrows = false } = {}) {
+function fakeDida(tasksByProject) {
   const calls = [];
   return {
     calls,
@@ -22,7 +22,7 @@ function fakeDida(tasksByProject, { getThrows = false } = {}) {
       const task = Object.values(tasksByProject).flat().find((t) => t.id === id);
       return task
         ? { stdout: JSON.stringify(task), stderr: '', exitCode: 0 }
-        : { stdout: '', stderr: 'DIDA API 错误 404: resource_not_found', exitCode: getThrows ? 1 : 0 };
+        : { stdout: '', stderr: 'DIDA API 错误 404: resource_not_found', exitCode: 1 };
     },
   };
 }
@@ -54,7 +54,7 @@ test('取不到的任务记 null，不影响其余条目', () => {
   assert.deepEqual(state, [null, { id: B }]);
 });
 
-test('清单一）都枚举不到时回退到账本记的清单直查', () => {
+test('清单都枚举不到时回退到账本记的清单直查', () => {
   const dida = fakeDida({ [P1]: [] });
   const state = buildState({ dida, created: [{ id: A, projectId: P1 }], projects: [P1] });
   assert.equal(state[0], null);
