@@ -101,3 +101,13 @@ test('manifest 里的 BigInt 折成字符串，不抛错', (t) => {
   assert.doesNotThrow(() => writeManifest(dir, { assertion: { results: [{ ok: false, expected: 1n }] } }));
   assert.match(fs.readFileSync(path.join(dir, 'manifest.json'), 'utf8'), /1n/);
 });
+
+test('两个字段指向同一个对象不算环，值要原样留下', (t) => {
+  const dir = tmpRepo(t);
+  const shared = { kind: 'TEXT' };
+  writeManifest(dir, { assertion: { results: [{ ok: false, expected: shared, actual: shared }] } });
+
+  const text = fs.readFileSync(path.join(dir, 'manifest.json'), 'utf8');
+  assert.doesNotMatch(text, /循环引用/, '共享引用是正常数据');
+  assert.match(text, /"kind": "TEXT"/);
+});

@@ -5,8 +5,6 @@ import { snapshotProjects } from './cleanup.mjs';
 // agent 可以用 task move 把任务挪到别的测试清单，也可能重复给 --project
 // （commander 取最后一个，账本记第一个）。枚举不到的才回退用账本值直查，覆盖
 // 任务建在测试清单之外的情况（真 CLI 直接调用绕过了 shim）。
-// 退出码非零但 stdout 是合法 JSON 时照样收下：真 CLI 在错误路径上会带一行 libuv
-// 断言导致非零退出，按退出码一刀切会把拿到的任务误记成 null。
 export function buildState({ dida, created, projects }) {
   if (created.length === 0) return [];
 

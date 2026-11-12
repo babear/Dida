@@ -213,17 +213,28 @@ async function runOne(options, scenario, projects, assertionFn) {
 
 // manifest 里带着断言模块返回的原值，那些值不受我们控制：循环引用、BigInt 都会让
 // JSON.stringify 抛错。它抛在这里意味着清场还没跑——任务会留在真实清单里没人删。
-// 所以宁可把那个值折成一句人话，也不能让整份 manifest 写不出去。
+// 所以先照常序列化；真抛了才降级，把环与 BigInt 一起折成占位串。
+// 不预先做替换：JSON.stringify 的 replacer 拿不到「子树结束」的回调，用祖先链
+// 会把同一对象在两个兄弟字段里各出现一次（expected 与 actual 指向同一份）误判成环。
 function safeStringify(value) {
-  const seen = new WeakSet();
-  return JSON.stringify(value, (key, entry) => {
-    if (typeof entry === 'bigint') return `${entry}n`;
-    if (entry && typeof entry === 'object') {
-      if (seen.has(entry)) return '[循环引用]';
-      seen.add(entry);
-    }
-    return entry;
-  }, 2);
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    const onPath = new WeakSet();
+    const substitute = (entry) => {
+      if (typeof entry === 'bigint') return `${entry}n`;
+      if (!entry || typeof entry !== 'object') return entry;
+      if (onPath.has(entry)) return '[循环引用]';
+      onPath.add(entry);
+      const out = Array.isArray(entry)
+        ? entry.map(substitute)
+        : Object.fromEntries(Object.entries(entry).map(([k, v]) => [k, substitute(v)]));
+      // 只在「当前这条递归路径上」判环：兄弟字段共享同一对象是正常数据，不能标成环。
+      onPath.delete(entry);
+      return out;
+    };
+    return JSON.stringify(substitute(value), null, 2);
+  }
 }
 
 export function writeManifest(runDir, manifest) {
@@ -375,7 +386,7 @@ async function main() {
       failed: 'FAILED',
       broken: 'BROKEN',
       invalid: 'INVALID',
-    }[manifest.assertion.status] ?? 'UNKNOWN';
+    }[manifest.assertion.status];
     console.log(`${verdict} ${id}  run=${run}`);
     console.log(`  skill sha256=${manifest.skill.sha256.slice(0, 16)} files=${manifest.skill.files} git=${manifest.skill.git.rev?.slice(0, 12)}${manifest.skill.git.dirty ? ' (dirty)' : ''}`);
     console.log(`  model alias=${manifest.model.requested_alias} provider=${manifest.model.provider}（别名不等于实际执行模型，真实映射见 manifest.model.alias_mapping）`);

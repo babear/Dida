@@ -152,3 +152,15 @@ test('stdout 不是合法 JSON 时才抛错，并带上 stderr', () => {
   const dida = { run: () => ({ stdout: 'DIDA API 错误 500', stderr: '网络抖动', exitCode: 1 }) };
   assert.throws(() => listTasks(dida, P1), /网络抖动/);
 });
+
+test('真 CLI 的失败形状（stdout 空、错误在 stderr、退出码 1）必须抛错，不能当成空清单', () => {
+  // 当成空清单会让清场以为自己删干净了：deleted=[]、hasCleanupProblem=false、退出码 0，
+  // 而任务还留在真实清单里。这正是 README 记录的真 CLI 失败形态。
+  const dida = { run: () => ({ stdout: '', stderr: 'DIDA API 错误 500: boom', exitCode: 1 }) };
+  assert.throws(() => listTasks(dida, P1), /DIDA API 错误 500/);
+});
+
+test('退出码 0 且 stdout 为空才是真的空清单', () => {
+  const dida = { run: () => ({ stdout: '', stderr: '', exitCode: 0 }) };
+  assert.deepEqual(listTasks(dida, P1), []);
+});

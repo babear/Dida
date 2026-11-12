@@ -54,16 +54,18 @@ export function renderAssertions(results) {
     .join('\n');
 }
 
+const VERDICT_HEADING = '## 判定';
+
 // broken 与 invalid 的报告形状一样：一句标题、一句原因、可选的失败项明细。
 // 区别只在措辞指向「改用例」还是「重跑」。
 function detailBlock(title, detail, results) {
-  const lines = ['## 判定', '', `**${title}**`, '', detail];
+  const lines = [VERDICT_HEADING, '', `**${title}**`, '', detail];
   if (results?.length) lines.push('', renderAssertions(results));
   return lines.join('\n');
 }
 
 export function renderVerdict({ assertion, session }) {
-  const lines = ['## 判定', ''];
+  const lines = [VERDICT_HEADING, ''];
   if (assertion?.status === 'missing') {
     lines.push('**用例配置错误：缺断言**', '');
     lines.push('`scenarios/<id>/` 里没有 `assert.mjs`，本次没有开会话。补上断言，或把用例移到 `probes/`。');
@@ -78,7 +80,7 @@ export function renderVerdict({ assertion, session }) {
     return detailBlock('本次结果不可归因，需重跑', assertion.detail ?? '', assertion.results);
   }
   if (!sessionCompleted(session ?? {})) {
-    return '## 判定\n\n会话未正常结束，不评断言（见「会话」小节的退出码）。';
+    return `${VERDICT_HEADING}\n\n会话未正常结束，不评断言（见「会话」小节的退出码）。`;
   }
   if (assertion?.status === 'failed') {
     lines.push('**结局断言 未通过**', '', renderAssertions(assertion.results ?? []));
