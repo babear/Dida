@@ -165,7 +165,7 @@ run-<runId>/
 | `trace.ndjson` | 被测会话的原始轨迹 |
 | `calls.ndjson` | shim 记下的调用序列，每行 `{argv, at, decision}`；被拒的另有 `reason` 与 `targets` |
 | `created.ndjson` | 本 run 建成并立刻记账的任务，一行一条；清场与断言都只认这一份 |
-| `state.json` | 终态快照：账本里每个 id 取回的现状，取不到的记 `null`。按测试清单枚举定位，枚举不到才回退账本的 `projectId`。断言读它 |
+| `state.json` | 终态快照：账本里每个 id 取回的现状，取不到的记 `null`。按测试清单枚举定位，枚举不到才回退账本的 `projectId`。断言读它。列清单失败时不写这个文件（不写比写空数组诚实） |
 | `manifest.json` | 沙箱绝对路径、skill 指纹与文件数、git rev 与 dirty、三层模型信息、工具面、轮数、成本、调用数、创建数、清场结果、标记 |
 | `report.md` | 给人读的报告：首行是 skill 指纹 / 模型 / 沙箱路径，接着是判定结论与落败的断言，中间是本次创建的任务 id 表，末尾是摘要 |
 

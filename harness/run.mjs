@@ -142,17 +142,20 @@ async function runOne(options, scenario, projects, assertionFn) {
   // 取快照要枚举清单一，那一步失败不能带走整次运行——下面的 manifest 与清场
   // 必须照常执行，否则任务建在真实清单里却没人删。
   const statePath = path.join(runDir, 'state.json');
-  let state;
+  let state = [];
+  let stateFailed = false;
   let stateError = null;
   try {
     state = buildState({ dida: realDida(), created, projects });
   } catch (error) {
-    state = [];
-    stateError = error.message;
+    // 用布尔表示「失败」，不靠 message 的真假：空格错误消息的 error 会让
+    // 标志变 falsy，于是写下空的 state.json 并让断言在 [] 上判 FAILED。
+    stateFailed = true;
+    stateError = error.message || String(error);
   }
   // 取不到快照时不写 state.json：写一份空数组会让人以为「这次一条任务都没有」，
   // 重放时读出的是假事实。文件缺失才是诚实的。
-  if (!stateError) fs.writeFileSync(statePath, JSON.stringify(state, null, 2));
+  if (!stateFailed) fs.writeFileSync(statePath, JSON.stringify(state, null, 2));
 
   const sessionInfo = {
     exitCode: session.exitCode,
@@ -166,6 +169,7 @@ async function runOne(options, scenario, projects, assertionFn) {
   // 没做到判 failed。判定本身不抛错，下面的 manifest 与清场总执行。
   const assertion = await decideAssertion({
     completed,
+    stateFailed,
     stateError,
     assertionFn,
     input: { tasks: state, created, calls, session: sessionInfo },
@@ -202,7 +206,7 @@ async function runOne(options, scenario, projects, assertionFn) {
     },
     created,
     // count 为 null 表示没取到快照，与「取到了、0 条」区分开。
-    state: { path: statePath, count: stateError ? null : state.length, error: stateError },
+    state: { path: statePath, count: stateFailed ? null : state.length, error: stateError },
     assertion,
     testProjects: projects,
     callerMarker: sandbox.callerMarker,
@@ -397,8 +401,11 @@ async function main() {
     console.log(manifest.state.error
       ? `  state=未落盘（${manifest.state.error}）`
       : `  state=${path.relative(repoRoot, manifest.state.path)}（${manifest.state.count} 条）`);
+    // invalid 的失败项指向 harness 自己（快照取不到），不是断言不通过——措辞要分开，
+    // 否则控制台会把一次基础设施故障读成 skill 缺陷。
     for (const result of manifest.assertion.results.filter((r) => !r.ok)) {
-      console.error(`    断言未通过 ${result.name}：期望 ${formatValue(result.expected)}，实际 ${formatValue(result.actual)}`);
+      const label = manifest.assertion.status === 'invalid' ? '结果不可归因' : '断言未通过';
+      console.error(`    ${label} ${result.name}：期望 ${formatValue(result.expected)}，实际 ${formatValue(result.actual)}`);
     }
     reportCleanup(cleanup, run);
     console.log(`  caller marker=${manifest.callerMarker}`);

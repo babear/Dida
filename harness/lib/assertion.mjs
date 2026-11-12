@@ -56,10 +56,10 @@ export async function runAssert(assertionFn, input) {
 
 // 一条 scenario 的结局判定。三类的分界照 ADR-0012：用例缺陷判 broken（去修用例），
 // 结果不可归因判 invalid（重跑），断言不通过判 failed（去改 skill）。
-export async function decideAssertion({ completed, stateError, assertionFn, input }) {
+export async function decideAssertion({ completed, stateFailed = false, stateError = null, assertionFn, input }) {
   if (!completed) return { status: 'skipped', results: [] };
 
-  if (stateError) {
+  if (stateFailed) {
     return {
       status: 'invalid',
       detail: `取终态快照失败：${stateError}`,

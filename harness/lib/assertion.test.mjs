@@ -94,23 +94,24 @@ test('元素缺布尔 ok 时也算形状不对', async () => {
 });
 
 test('会话没正常结束 → skipped，断言不评', async () => {
-  const out = await decideAssertion({ completed: false, stateError: null, assertionFn: () => { throw new Error('不该被调用'); }, input: INPUT });
+  const out = await decideAssertion({ completed: false, stateFailed: false, assertionFn: () => { throw new Error('不该被调用'); }, input: INPUT });
   assert.equal(out.status, 'skipped');
 });
 
 test('断言全过 → passed', async () => {
-  const out = await decideAssertion({ completed: true, stateError: null, assertionFn: () => [{ ok: true }], input: INPUT });
+  const out = await decideAssertion({ completed: true, stateFailed: false, assertionFn: () => [{ ok: true }], input: INPUT });
   assert.equal(out.status, 'passed');
 });
 
 test('断言有失败项 → failed（去改 skill）', async () => {
-  const out = await decideAssertion({ completed: true, stateError: null, assertionFn: () => [{ ok: false, name: 'x' }], input: INPUT });
+  const out = await decideAssertion({ completed: true, stateFailed: false, assertionFn: () => [{ ok: false, name: 'x' }], input: INPUT });
   assert.equal(out.status, 'failed');
 });
 
 test('快照取不到 → invalid（重跑），不是 failed', async () => {
   const out = await decideAssertion({
     completed: true,
+    stateFailed: true,
     stateError: '网络抖动',
     assertionFn: () => { throw new Error('不该被调用'); },
     input: INPUT,
@@ -122,7 +123,7 @@ test('快照取不到 → invalid（重跑），不是 failed', async () => {
 test('断言模块抛异常 → broken（去改用例），不是 failed', async () => {
   const out = await decideAssertion({
     completed: true,
-    stateError: null,
+    stateFailed: false,
     assertionFn: () => { throw new Error('崩了'); },
     input: INPUT,
   });
@@ -131,7 +132,7 @@ test('断言模块抛异常 → broken（去改用例），不是 failed', async
 });
 
 test('断言返回非数组 → broken（去改用例）', async () => {
-  const out = await decideAssertion({ completed: true, stateError: null, assertionFn: () => 'nope', input: INPUT });
+  const out = await decideAssertion({ completed: true, stateFailed: false, assertionFn: () => 'nope', input: INPUT });
   assert.equal(out.status, 'broken');
 });
 
@@ -141,10 +142,23 @@ test('归一化阶段自己炸了（坏了元素的 actual 循环引用）也不
   // 元素没有布尔 ok → 走 normalizeResult 的 JSON.stringify 分支，循环引用会抛
   const out = await decideAssertion({
     completed: true,
-    stateError: null,
+    stateFailed: false,
     assertionFn: () => [{ name: 'x', actual: circular }],
     input: INPUT,
   });
   assert.equal(out.status, 'broken');
   assert.match(out.detail, /断言阶段异常/);
+});
+
+test('快照失败的空消息也判 invalid，不靠 message 的真假', async () => {
+  // 用布尔标志表达失败：空消息的 error 会让「if (stateError)」变 falsy，
+  // 那样会写下空 state.json 并让断言在 [] 上判 FAILED。
+  const out = await decideAssertion({
+    completed: true,
+    stateFailed: true,
+    stateError: '',
+    assertionFn: () => [{ ok: true }],
+    input: INPUT,
+  });
+  assert.equal(out.status, 'invalid');
 });
