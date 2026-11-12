@@ -43,6 +43,16 @@ pwsh 7 两种都保真。`.cmd` 路径与 5.1 相同。
 
 这直接影响 #8 的过程断言规则 2：末尾那种读成「有 flag 没值」，中段那种把下一个 flag 当成 content 的值，判据都会失真。测试 `harness/lib/sandbox.test.mjs` 对这个行为两端都有断言，锁住现状。
 
+### `--` 分隔符经 `.ps1` 消失
+
+`dida task delete -- <projectId> <taskId>` 经 `.ps1` 到达 shim 时 `--` 不见了（`.cmd` 保留）。PowerShell 把 `--` 当自己的参数终止符吃掉，5.1 与 pwsh 7 都一样。
+
+后果：`guard.mjs` 复刻的 commander 语义「`--` 之后一律当位置参数」在真实路径上永远收不到。它自己的单测直接调 `decide()`，不经过这一层，所以抓不到。与多行截断同类，是「参数在到达 shim 之前被破坏」的另一种形态，修复归 #29。
+
+### 值里的双引号被剥掉
+
+`--content 'say "hi"'` 到达 shim 时变成 `say hi`，两条入口都一样。这是 PowerShell 自身的引号处理，不是 `.ps1` 独有。
+
 ## 决定
 
 沙箱 `bin/` 生成**两份壳**，共用同一个 `dida-shim.mjs`：

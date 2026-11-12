@@ -244,3 +244,24 @@ PS_TEST('空串 --content 在中段：5.1 把下一个 flag 顶成值', (t) => {
   const argv = runEmptyContent('powershell.exe', t, ' --title 之后');
   assert.equal(argv[argv.indexOf('--content') + 1], '--title', '5.1 把 --title 顶成 content 的值；若不再如此请更新 ADR-0013 与本断言');
 });
+
+// `--` 分隔符经 .ps1 会消失：PowerShell 把它当自己的参数终止符吃掉，不再往下传。
+// 后果是 guard.mjs 复刻的「`--` 之后一律当位置参数」在真实路径上永远收不到，
+// 而 guard 的单测直接调 decide()，抓不到这一层。.cmd 保留 `--`。
+// 与多行截断同类（参数在到达 shim 前被破坏），修复归 #29。
+PS_TEST('`--` 经 .ps1 消失、经 .cmd 保留（已知局限，锁住以便变化时报警）', (t) => {
+  const shell = findPowerShell();
+  if (!shell) return t.skip('本机没有 PowerShell');
+  const { env, observed, binDir } = shimFixture(sandboxDir(t));
+  const run = (call) => {
+    fs.rmSync(observed, { force: true });
+    spawnSync(shell, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', `${env}; ${call}`], { encoding: 'utf8' });
+    return JSON.parse(fs.readFileSync(observed, 'utf8'));
+  };
+
+  const viaPs1 = run(`dida task delete -- ${PROJECTS[0]} t1`);
+  assert.ok(!viaPs1.includes('--'), `.ps1 应当吞掉 --，实际 ${JSON.stringify(viaPs1)}；若已修复请更新 ADR-0013 与 #29`);
+
+  const viaCmd = run(`& ${psLiteral(path.join(binDir, 'dida.cmd'))} task delete -- ${PROJECTS[0]} t1`);
+  assert.ok(viaCmd.includes('--'), `.cmd 应当保留 --，实际 ${JSON.stringify(viaCmd)}`);
+});
