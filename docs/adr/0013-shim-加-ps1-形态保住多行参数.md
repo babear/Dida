@@ -21,6 +21,15 @@ ADR-0004 拒绝 `.ps1` 的理由是「`dida.ps1` 未签名，PowerShell 默认�
 
 跨目录时 PATH 顺序优先：沙箱 `bin` 前置，且 `bin` 内同目录 `.ps1` 胜过 `.cmd`。
 
+参数长度上限（本机 Windows 10 19045，按整条命令行计）：
+
+| 入口 | 上限 | 约合 `--items` 条数 |
+|---|---|---|
+| `dida.ps1`（经 shim） | 约 32760 | 约 680 条 |
+| `dida.cmd`（经 shim） | 约 7900 | 约 160 条 |
+
+`.cmd` 更窄是因为 cmd.exe 自身的输入行缓冲（8191）先于 Win32 `CreateProcess` 的 32767 触发，而 shim 壳的固定前缀已占约 250 字符。两条都不是 shim 能改的上限：前者要绕开 cmd，后者要真 CLI 支持 stdin 或文件输入，当前 `@suibiji/dida-cli@0.1.14` 不支持。
+
 ## 决定
 
 沙箱 `bin/` 生成**两份壳**，共用同一个 `dida-shim.mjs`：
