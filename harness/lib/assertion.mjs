@@ -29,15 +29,44 @@ function normalizeResult(result, index) {
 
 // 断言抛错、返回非数组、或返回数组里混了坏元素，都折成失败结果：
 // 一次运行要跑出所有失败项，不能因为断言自己写崩了就丢了整场景的结论。
+// evaluated 区分「用例自己算出了结论」与「用例根本没算出来」——后者是用例缺陷，
+// 不是 skill 缺陷，上层要分开判。
 export async function runAssert(assertionFn, input) {
   let results;
   try {
     results = await assertionFn(input);
   } catch (error) {
-    return [{ ok: false, name: '断言执行抛异常', expected: '不抛异常', actual: error.message }];
+    return { evaluated: false, results: [{ ok: false, name: '断言执行抛异常', expected: '不抛异常', actual: error.message }] };
   }
   if (!Array.isArray(results)) {
-    return [{ ok: false, name: '断言应返回数组', expected: '数组', actual: typeof results }];
+    return { evaluated: false, results: [{ ok: false, name: '断言应返回数组', expected: '数组', actual: typeof results }] };
   }
-  return results.map(normalizeResult);
+  return { evaluated: true, results: results.map(normalizeResult) };
+}
+
+// 一条 scenario 的结局判定。三类的分界照 ADR-0012：用例缺陷判 broken（去修用例），
+// 结果不可归因判 invalid（重跑），断言不通过判 failed（去改 skill）。
+export async function decideAssertion({ completed, stateError, assertionFn, input }) {
+  if (!completed) return { status: 'skipped', results: [] };
+
+  if (stateError) {
+    return {
+      status: 'invalid',
+      detail: `取终态快照失败：${stateError}`,
+      results: [{ ok: false, name: '终态快照不可用', expected: '能列出测试清单', actual: stateError }],
+    };
+  }
+
+  try {
+    const { evaluated, results } = await runAssert(assertionFn, input);
+    if (!evaluated) return { status: 'broken', detail: '断言模块没能给出结果数组', results };
+    return { status: results.every((result) => result.ok) ? 'passed' : 'failed', results };
+  } catch (error) {
+    // 归一化本身炸了（元素的 expected 是循环引用之类）：仍要留下结论让清场照常跑。
+    return {
+      status: 'broken',
+      detail: `断言阶段异常：${error.message}`,
+      results: [{ ok: false, name: '断言阶段异常', expected: '正常完成', actual: error.message }],
+    };
+  }
 }

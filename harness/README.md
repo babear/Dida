@@ -76,7 +76,17 @@ npm run test:harness  # harness 自己的单元测试，不烧 API
 2. **过程断言**：调用日志 argv 序列上的三条硬规则，见 ADR-0005。第 3 条（越界写入）现由 shim 当场拒绝并记 `rejected`，只需接进判定。
 3. **结局断言**：读终态快照 `runs/<runId>/state.json`——账本里每个 id 取回的任务现状，取不到的记 `null`。定位与清场同一套：先按测试清单枚举再按 id 找，不信账本记的 `projectId`（agent 可能用 `task move` 挪走任务），枚举不到才回退到账本值直查。
 
-**当前判定口径**：会话正常结束（`PASSED` / `FAILED` / `INCOMPLETE`）+ 结局断言。缺 `assert.mjs` 判 `MISCONFIGURED`，不开会话，但照样落一份只含判定的报告（`runs/<runId>/`）。快照取不到判 `INVALID`——结果不可归因，需重跑，不当作 skill 缺陷。`--scenario` 写错 id 报 `NOT FOUND`，与缺断言分开。可信度检查与过程断言分别归 #8 与 #18。
+**当前判定口径**：会话正常结束（`PASSED` / `FAILED` / `INCOMPLETE`）+ 结局断言。除 `PASSED` 外退出码都是 1。
+
+| 结果 | 含义 | 怎么修 |
+|---|---|---|
+| `FAILED` | 断言未通过，skill 没做到 | 改 skill |
+| `BROKEN` | 断言模块没给出结果数组，用例有缺陷 | 改用例 |
+| `INVALID` | 终态快照取不到，结果不可归因 | 重跑 |
+| `MISCONFIGURED` | 缺 `assert.mjs`，不开会话但仍落一份只含判定的报告 | 补用例，或移到 `probes/` |
+| `NOT FOUND` | `--scenario` 写错 id | 改正 id |
+
+可信度检查与过程断言分别归 #8 与 #18。
 
 ## 沙箱
 

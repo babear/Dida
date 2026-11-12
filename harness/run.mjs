@@ -9,7 +9,7 @@ import { parseCmdShim } from './lib/shim.mjs';
 import { buildSessionArgv, runSession, parseTranscript, sanitizeEnv, sessionCompleted, summarizeTranscript } from './lib/session.mjs';
 import { defaultSettingsPath, ensureRunsDir, gitState, modelInfo, runId } from './lib/provenance.mjs';
 import { listScenarios, loadScenario } from './lib/scenario.mjs';
-import { loadAssert, runAssert } from './lib/assertion.mjs';
+import { decideAssertion, loadAssert } from './lib/assertion.mjs';
 import { buildState } from './lib/state.mjs';
 import { crossCheck, outOfBoundsCalls, parseCallLog, rejectedCalls } from './lib/calllog.mjs';
 import { readCreated } from './lib/created.mjs';
@@ -160,27 +160,14 @@ async function runOne(options, scenario, projects, assertionFn) {
   };
   const completed = sessionCompleted(session);
 
-  // 会话没正常结束时终态不可归因，断言不评。缺断言已经在 main 里挡掉，走不到这里。
-  // 快照没取到同理：拿基础设施故障去判 skill 缺陷是错的，标 broken 让人重跑。
-  let assertion = { status: 'skipped', results: [] };
-  if (completed && stateError) {
-    assertion = {
-      status: 'broken',
-      detail: `取终态快照失败：${stateError}`,
-      results: [{ ok: false, name: '终态快照不可用', expected: '能列出测试清单', actual: stateError }],
-    };
-  } else if (completed) {
-    try {
-      const results = await runAssert(assertionFn, { tasks: state, created, calls, session: sessionInfo });
-      assertion = { status: results.every((result) => result.ok) ? 'passed' : 'failed', results };
-    } catch (error) {
-      // 断言阶段再出意外也不能让这次运行失去报告与清场：任务已经建进真实清单了。
-      assertion = {
-        status: 'failed',
-        results: [{ ok: false, name: '断言阶段异常', expected: '正常完成', actual: error.message }],
-      };
-    }
-  }
+  // 三类结局的分界见 decideAssertion 的注释：用例缺陷判 broken、不可归因判 invalid、
+  // 没做到判 failed。判定本身不抛错，下面的 manifest 与清场总执行。
+  const assertion = await decideAssertion({
+    completed,
+    stateError,
+    assertionFn,
+    input: { tasks: state, created, calls, session: sessionInfo },
+  });
 
   const manifest = {
     run: runKey,
@@ -360,13 +347,17 @@ async function main() {
     // 清场失败只记 log 不中断：每条 scenario 的账本按 runId 隔离，删不掉自己的那几条
     // 不会影响下一条的判断。退出码仍非零，让人知道有现场要收。
     const cleanupProblem = hasCleanupProblem(cleanup);
-    // broken（快照取不到）同样算失败：结果不可归因，不能让它安静地算通过。
-    if (!completed || cleanupProblem || ['failed', 'broken'].includes(manifest.assertion.status)) failures += 1;
+    // 除 passed 外都要非零：failed 是 skill 有缺陷，broken 是用例有缺陷，
+    // invalid 是结果不可归因——三者都要人看一眼，不能安静地算通过。
+    if (!completed || cleanupProblem || manifest.assertion.status !== 'passed') failures += 1;
 
-    const verdict = manifest.assertion.status === 'passed' ? 'PASSED'
-      : manifest.assertion.status === 'skipped' ? 'INCOMPLETE'
-        : manifest.assertion.status === 'broken' ? 'INVALID'
-          : 'FAILED';
+    const verdict = {
+      passed: 'PASSED',
+      skipped: 'INCOMPLETE',
+      failed: 'FAILED',
+      broken: 'BROKEN',
+      invalid: 'INVALID',
+    }[manifest.assertion.status] ?? 'UNKNOWN';
     console.log(`${verdict} ${id}  run=${run}`);
     console.log(`  skill sha256=${manifest.skill.sha256.slice(0, 16)} files=${manifest.skill.files} git=${manifest.skill.git.rev?.slice(0, 12)}${manifest.skill.git.dirty ? ' (dirty)' : ''}`);
     console.log(`  model alias=${manifest.model.requested_alias} provider=${manifest.model.provider}（别名不等于实际执行模型，真实映射见 manifest.model.alias_mapping）`);

@@ -54,9 +54,18 @@ export function renderVerdict({ assertion, session }) {
     return lines.join('\n');
   }
   if (assertion?.status === 'broken') {
-    // 会话没跑起来（断言模块坏）与跑完了但快照取不到，都算「重跑」，不是 skill 缺陷。
+    // 用例自己的问题：断言模块坏了、没给出结果数组。修用例，不用改 skill。
+    lines.push('**用例配置错误：断言没给出结果**', '');
+    lines.push(assertion.detail ?? '断言模块没能给出结果数组。');
+    if (assertion.results?.length) {
+      lines.push('', renderAssertions(assertion.results));
+    }
+    return lines.join('\n');
+  }
+  if (assertion?.status === 'invalid') {
+    // 结果不可归因：重跑，不当作 skill 缺陷（ADR-0012）。
     lines.push('**本次结果不可归因，需重跑**', '');
-    lines.push(assertion.detail ?? '断言阶段没能开始。');
+    lines.push(assertion.detail ?? '');
     if (assertion.results?.length) {
       lines.push('', renderAssertions(assertion.results));
     }

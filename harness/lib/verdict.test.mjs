@@ -14,10 +14,10 @@ test('断言全过时报告写「通过」，不点名任何断言', () => {
   assert.doesNotMatch(text, /父任务正文非空/);
 });
 
-test('快照取不到（broken）写成「结果不可归因，需重跑」，不写成用例配置错误', () => {
+test('快照取不到（invalid）写成「结果不可归因，需重跑」，不写成用例配置错误', () => {
   const text = renderVerdict({
     assertion: {
-      status: 'broken',
+      status: 'invalid',
       detail: '取终态快照失败：列清单 p 的任务失败：网络抖动',
       results: [{ ok: false, name: '终态快照不可用', expected: '能列出测试清单', actual: '网络抖动' }],
     },
@@ -26,6 +26,21 @@ test('快照取不到（broken）写成「结果不可归因，需重跑」，�
   assert.match(text, /不可归因/);
   assert.match(text, /网络抖动/);
   assert.doesNotMatch(text, /用例配置错误/);
+});
+
+test('断言模块坏（broken）写成用例配置错误，与 invalid 分开', () => {
+  const broken = renderVerdict({
+    assertion: { status: 'broken', detail: '断言模块没能给出结果数组', results: [] },
+    session: SESSION_OK,
+  });
+  const invalid = renderVerdict({
+    assertion: { status: 'invalid', detail: '取终态快照失败：网络抖动', results: [] },
+    session: SESSION_OK,
+  });
+  assert.match(broken, /用例配置错误/);
+  assert.doesNotMatch(broken, /不可归因/);
+  assert.match(invalid, /不可归因/);
+  assert.doesNotMatch(invalid, /用例配置错误/);
 });
 
 test('旧 manifest（没有 assertion 字段）不写「通过」——它根本没评过', () => {
