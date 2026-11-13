@@ -6,7 +6,7 @@ import { recordCreated } from './lib/created.mjs';
 import { decide, rejectText, stripNodeAssertion } from './lib/guard.mjs';
 import { TEST_PROJECTS } from './lib/guard-config.mjs';
 
-// 形参由 sandbox 生成 bin/dida.cmd 时注入：<node 可执行> <真 CLI 脚本> <用户传入的 argv...>
+// 形参由 sandbox 生成 bin/dida.ps1 与 bin/dida.cmd 时注入：<node 可执行> <真 CLI 脚本> <用户传入的 argv...>
 const [program, script, ...argv] = process.argv.slice(2);
 
 const callLogPath = process.env.DIDA_CALL_LOG;

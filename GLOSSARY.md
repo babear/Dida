@@ -37,11 +37,11 @@ _Avoid_: 工具箱、权限、allowedTools（除非指命令行参数）
 _Avoid_: 终端、命令行
 
 **可执行形态**:
-同一条命令的不同可执行文件，如 `dida.cmd`、`dida.ps1` 与无后缀的 `dida`。shim 的形态是 `.cmd`。
+同一条命令的不同可执行文件，如 `dida.cmd`、`dida.ps1` 与无后缀的 `dida`。shim 有 `.ps1` 与 `.cmd` 两份形态。
 _Avoid_: 版本、变体、入口
 
 **shim**:
-`PATH` 前置目录里的同名 `dida` 可执行文件（形态为 `.cmd`），由工具面上的 `PowerShell` 调用，透明转发给真 CLI，同时记账并拒绝越界写入。
+`PATH` 前置目录里的同名 `dida` 可执行文件（`.ps1` 与 `.cmd` 两份形态，PowerShell 优先命中 `.ps1`），由工具面上的 `PowerShell` 调用，透明转发给真 CLI，同时记账并拒绝越界写入。
 _Avoid_: mock、桩、代理、wrapper
 
 **调用方标记**:

@@ -98,7 +98,7 @@ run-<runId>/
 │   ├── settings.json      # 只含源 settings.json 的 ANTHROPIC_* 键
 │   └── skills/dida-cli/   # 从 --skill-path 整体复制，末尾追加调用方标记
 ├── agents.json            # 从 harness/agents.json 复制，工具面限定
-├── bin/                   # 前置到 PATH 的 shim：dida.cmd + dida-shim.mjs + lib/
+├── bin/                   # 前置到 PATH 的 shim：dida.ps1 + dida.cmd + dida-shim.mjs + lib/
 └── materials/             # scenario 素材（若有）
 ```
 
@@ -122,9 +122,10 @@ run-<runId>/
 
 ## shim
 
-沙箱 `bin/` 下有三类文件：
+沙箱 `bin/` 下有这些文件：
 
-- `dida.cmd`：一行 shell 壳，`node dida-shim.mjs <node 可执行> <真 CLI 脚本> %*`。
+- `dida.ps1`：一行 PowerShell 壳，`node dida-shim.mjs <node 可执行> <真 CLI 脚本> @args`。PowerShell 同目录内优先命中它，`@args` 原样展开，多行参数保真。
+- `dida.cmd`：一行 shell 壳，`node dida-shim.mjs <node 可执行> <真 CLI 脚本> %*`。供 agent 显式写 `dida.cmd` 全名时使用；这一路的多行与空串值都会失真。
 - `dida-shim.mjs`：判定 + 记账 + 转发。
 - `lib/`：shim 只依赖的三个模块（`calllog.mjs`、`created.mjs`、`guard.mjs`），外加沙箱生成时烘焙的 `guard-config.mjs`（测试清单集合）。
 
@@ -154,7 +155,7 @@ run-<runId>/
 - 参数解析复刻 commander 语义：`--flag=value`、flag 夹在位置参数中间、`--` 之后一律当位置参数、重复 flag 全部校验、`--project=` 空值视为解析不出目标。
 - 写命令缺 `--project` 时错误文本与真 CLI 不同（真 CLI 报 required option），两条路都写不出去。
 
-**已知边界**：参数在 `dida.cmd` 这一层已经由 cmd 解析过一遍，多行 `--content` 会在这里被截成第一行。修法要绕开 `.cmd` 形态本身，另开 issue 追踪。agent 仍可用绝对路径直接调真 `dida.cmd` 绕过 shim，靠 `crossCheck` 在报告里标出来。
+**已知边界**：沙箱 `bin/` 里放 `dida.ps1` 与 `dida.cmd` 两份壳。PowerShell 同目录内优先命中 `.ps1`，其 `@args` 原样展开、多行 `--content` 保真；显式写 `dida.cmd` 时会落到 `.cmd`，那里的 `%*` 仍把多行截成第一行。agent 仍可用绝对路径直接调真 `dida.cmd` 绕过 shim，靠 `crossCheck` 在报告里标出来。
 
 ## 产物
 
@@ -177,5 +178,5 @@ run-<runId>/
 
 - 沙箱只隔离工作目录，不隔离文件系统：agent 仍可用绝对路径读沙箱外的文件，也可用绝对路径直接调真 `dida.cmd` 绕过 shim；`bin/lib/guard-config.mjs` 也在它的可写范围内。见 #3。
 - 轮数看门狗与预算护栏未实现，见 #11。
-- 多行 `--content` 在 `dida.cmd` 的 `%*` 层会被截成第一行（见上文 shim 段）。见 #13。
+- 多行 `--content` 只经 `dida.ps1` 入口时保真；`dida.cmd` 的 `%*` 层仍会截成第一行。`--` 分隔符、空串值、5.1 的双引号也各有失真，汇总见 ADR-0013，处理见 #29。
 - 越界写入防护只覆盖有目标清单的写命令；`habit *`、`focus *`、`tag *`、`project create`、`project group *` 一律拒绝，而不是校验它们的目标。
