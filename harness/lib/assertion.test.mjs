@@ -162,3 +162,95 @@ test('快照失败的空消息也判 invalid，不靠 message 的真假', async 
   });
   assert.equal(out.status, 'invalid');
 });
+
+test('可信度检查不一致 → invalid，先于快照失败，且不是 broken/failed', async () => {
+  const out = await decideAssertion({
+    completed: true,
+    crossCheck: { status: 'inconsistent', detail: '3 条 dida 调用 / 10 次 PowerShell' },
+    stateFailed: true,
+    stateError: '网络抖动',
+    assertionFn: () => [{ ok: true }],
+    input: INPUT,
+  });
+  assert.equal(out.status, 'invalid');
+  assert.equal(out.cause, 'cross-check');
+  assert.match(out.detail, /3 条 dida 调用 \/ 10 次 PowerShell/);
+  assert.match(out.detail, /重跑不一定能解决/);
+});
+
+test('可信度检查无法判定 → invalid，cause=indeterminate，措辞与「不一致」分开', async () => {
+  const out = await decideAssertion({
+    completed: true,
+    crossCheck: { status: 'indeterminate', detail: '0 条 dida 调用 / 0 次 PowerShell' },
+    stateFailed: false,
+    assertionFn: () => [{ ok: true }],
+    input: INPUT,
+  });
+  assert.equal(out.status, 'invalid');
+  assert.equal(out.cause, 'indeterminate');
+  assert.match(out.detail, /轨迹读不出可解析的事件/);
+});
+
+test('快照失败带 cause=state，措辞指向重跑', async () => {
+  const out = await decideAssertion({
+    completed: true,
+    crossCheck: { status: 'consistent', detail: '3 条 dida 调用 / 3 次 PowerShell' },
+    stateFailed: true,
+    stateError: '网络抖动',
+    assertionFn: () => [{ ok: true }],
+    input: INPUT,
+  });
+  assert.equal(out.status, 'invalid');
+  assert.equal(out.cause, 'state');
+  assert.match(out.detail, /重跑/);
+});
+
+test('可信度检查通过时不影响断言判定', async () => {
+  const passed = await decideAssertion({
+    completed: true,
+    crossCheck: { status: 'consistent', detail: '1 条 dida 调用 / 1 次 PowerShell' },
+    stateFailed: false,
+    assertionFn: () => [{ ok: true }],
+    input: INPUT,
+  });
+  assert.equal(passed.status, 'passed');
+
+  const failed = await decideAssertion({
+    completed: true,
+    crossCheck: { status: 'consistent', detail: '1 条 dida 调用 / 1 次 PowerShell' },
+    stateFailed: false,
+    assertionFn: () => [{ ok: false, name: 'x' }],
+    input: INPUT,
+  });
+  assert.equal(failed.status, 'failed');
+});
+
+test('不传 crossCheck（旧调用方）时行为与之前一致', async () => {
+  const out = await decideAssertion({
+    completed: true, stateFailed: false, assertionFn: () => [{ ok: true }], input: INPUT,
+  });
+  assert.equal(out.status, 'passed');
+});
+
+test('会话没正常结束但可信度不过时，报可信度失败而不是 skipped——绕过的结论更严重', async () => {
+  const out = await decideAssertion({
+    completed: false,
+    crossCheck: { status: 'inconsistent', detail: '3 条 dida 调用 / 10 次 PowerShell' },
+    stateFailed: false,
+    assertionFn: () => { throw new Error('不该被调用'); },
+    input: INPUT,
+  });
+  assert.equal(out.status, 'invalid');
+  assert.equal(out.cause, 'cross-check');
+});
+
+test('会话没正常结束且可信度通过时，仍是 skipped', async () => {
+  const out = await decideAssertion({
+    completed: false,
+    crossCheck: { status: 'consistent', detail: '1 条 dida 调用 / 1 次 PowerShell' },
+    stateFailed: false,
+    assertionFn: () => { throw new Error('不该被调用'); },
+    input: INPUT,
+  });
+  assert.equal(out.status, 'skipped');
+});

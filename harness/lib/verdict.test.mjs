@@ -14,18 +14,49 @@ test('断言全过时报告写「通过」，不点名任何断言', () => {
   assert.doesNotMatch(text, /父任务正文非空/);
 });
 
-test('快照取不到（invalid）写成「结果不可归因，需重跑」，不写成用例配置错误', () => {
+test('快照取不到（invalid, cause=state）写成「结果不可用」，不写成用例配置错误', () => {
   const text = renderVerdict({
     assertion: {
       status: 'invalid',
-      detail: '取终态快照失败：列清单 p 的任务失败：网络抖动',
+      cause: 'state',
+      detail: '取终态快照失败：列清单 p 的任务失败：网络抖动。这是基础设施故障，重跑一次。',
       results: [{ ok: false, name: '终态快照不可用', expected: '能列出测试清单', actual: '网络抖动' }],
     },
     session: SESSION_OK,
   });
-  assert.match(text, /不可归因/);
+  assert.match(text, /不可用/);
   assert.match(text, /网络抖动/);
+  assert.match(text, /重跑一次/);
   assert.doesNotMatch(text, /用例配置错误/);
+});
+
+test('可信度失败（invalid, cause=cross-check）的标题指向绕过 shim，与快照失败分开', () => {
+  const crossCheckText = renderVerdict({
+    assertion: {
+      status: 'invalid',
+      cause: 'cross-check',
+      detail: '调用日志与轨迹对不上：3 条 dida 调用 / 10 次 PowerShell。先查明是偶发还是系统性绕过，重跑不一定能解决。',
+      results: [],
+    },
+    session: SESSION_OK,
+  });
+  const stateText = renderVerdict({
+    assertion: { status: 'invalid', cause: 'state', detail: '取终态快照失败：x', results: [] },
+    session: SESSION_OK,
+  });
+  assert.match(crossCheckText, /绕过/);
+  assert.match(crossCheckText, /重跑不一定能解决/);
+  assert.doesNotMatch(crossCheckText, /终态快照/);
+  assert.match(stateText, /终态快照/);
+  assert.doesNotMatch(stateText, /绕过/);
+});
+
+test('旧 manifest 的 invalid 没有 cause 时用通用标题，不崩', () => {
+  const text = renderVerdict({
+    assertion: { status: 'invalid', detail: '取终态快照失败：x', results: [] },
+    session: SESSION_OK,
+  });
+  assert.match(text, /本次结果不可用/);
 });
 
 test('断言模块坏（broken）写成用例配置错误，与 invalid 分开', () => {
@@ -38,8 +69,8 @@ test('断言模块坏（broken）写成用例配置错误，与 invalid 分开',
     session: SESSION_OK,
   });
   assert.match(broken, /用例配置错误/);
-  assert.doesNotMatch(broken, /不可归因/);
-  assert.match(invalid, /不可归因/);
+  assert.doesNotMatch(broken, /不可用/);
+  assert.match(invalid, /不可用/);
   assert.doesNotMatch(invalid, /用例配置错误/);
 });
 
@@ -112,4 +143,25 @@ test('序列化不了的值（循环引用 / BigInt）折成一句人话，不�
   ]);
   assert.match(text, /无法序列化/);
   assert.doesNotMatch(text, /object Object/);
+});
+
+// 「## 会话」小节的三态：判不出结论时不能写「对得上」。
+test('crossCheck 三态：consistent / inconsistent / indeterminate 各写各的，互不冒充', async () => {
+  const { renderReport } = await import('./report.mjs');
+  const base = {
+    scenario: 's', run: 'r', sandbox: '/tmp/x', skill: { sha256: 'a', files: 1, git: {} },
+    model: { requested_alias: 'x', alias_mapping: {} },
+    session: { exitCode: 0, turns: 1, costUsd: 0 }, created: [], cleanup: { deleted: [] },
+    assertion: { status: 'passed', results: [] },
+  };
+  const at = (status) => renderReport({
+    ...base,
+    calls: { path: 'c', total: 1, rejected: 0, outOfBounds: 0, crossCheck: { calls: 1, shapeCalls: 1, status } },
+  });
+
+  assert.match(at('consistent'), /与轨迹对得上/);
+  assert.match(at('inconsistent'), /与轨迹对不上/);
+  const unknown = at('indeterminate');
+  assert.match(unknown, /无法比对/);
+  assert.doesNotMatch(unknown, /与轨迹对得上/, '不知道有没有问题，不能说没问题');
 });

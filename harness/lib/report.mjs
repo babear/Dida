@@ -57,11 +57,31 @@ export function renderAssertions(results) {
 const VERDICT_HEADING = '## 判定';
 
 // broken 与 invalid 的报告形状一样：一句标题、一句原因、可选的失败项明细。
-// 区别只在措辞指向「改用例」还是「重跑」。
+// 区别只在措辞指向「改用例」还是「查原因」。
 function detailBlock(title, detail, results) {
   const lines = [VERDICT_HEADING, '', `**${title}**`, '', detail];
   if (results?.length) lines.push('', renderAssertions(results));
   return lines.join('\n');
+}
+
+// invalid 有三种原因，性质不同：快照取不到是基础设施故障（重跑大概率能好），
+// 可信度失败是防护缺陷或 agent 行为（重跑不一定有用），无从判定则连结论都没有。
+// 标题要能分开——判不出结论时不能说「可能绕过了」，那是在断言一个没观测到的事实。
+const INVALID_TITLES = {
+  'cross-check': '本次结果不可信：调用可能绕过了 shim',
+  indeterminate: '本次结果不可用：轨迹读不出，无从比对',
+  state: '本次结果不可用：终态快照取不到',
+};
+
+// 控制台那一行要短，与报告标题共用同一份 cause 表，避免两处各自加分支。
+const INVALID_LABELS = {
+  'cross-check': '结果不可信',
+  indeterminate: '无从判定',
+  state: '结果不可用',
+};
+
+export function invalidLabel(cause) {
+  return INVALID_LABELS[cause] ?? '结果不可用';
 }
 
 export function renderVerdict({ assertion, session }) {
@@ -76,8 +96,9 @@ export function renderVerdict({ assertion, session }) {
     return detailBlock('用例配置错误：断言没给出结果', assertion.detail ?? '断言模块没能给出结果数组。', assertion.results);
   }
   if (assertion?.status === 'invalid') {
-    // 结果不可归因：重跑，不当作 skill 缺陷（ADR-0012）。
-    return detailBlock('本次结果不可归因，需重跑', assertion.detail ?? '', assertion.results);
+    // 结果不可用，不当作 skill 缺陷（ADR-0012）。旧 manifest 没有 cause，退回通用标题。
+    const title = INVALID_TITLES[assertion.cause] ?? '本次结果不可用';
+    return detailBlock(title, assertion.detail ?? '', assertion.results);
   }
   if (!sessionCompleted(session ?? {})) {
     return `${VERDICT_HEADING}\n\n会话未正常结束，不评断言（见「会话」小节的退出码）。`;
@@ -158,11 +179,15 @@ export function renderReport(manifest) {
   }
   const cross = manifest.calls?.crossCheck;
   if (cross) {
-    lines.push(
-      cross.consistent
-        ? `- 与轨迹对得上：${cross.calls} 条 dida 调用 / ${cross.shapeCalls} 次 PowerShell`
-        : `- **与轨迹对不上**：只有 ${cross.calls} 条 dida 调用，轨迹里却有 ${cross.shapeCalls} 次 PowerShell；可能有调用绕过了 shim`,
-    );
+    // 三态：判不出结论时不能说「对得上」，那是把「不知道」当成「没问题」。
+    // 旧 manifest 只有 consistent 布尔，按它回退——那时没有「判不出」这个概念。
+    const status = cross.status ?? (cross.consistent ? 'consistent' : 'inconsistent');
+    const line = {
+      consistent: `- 与轨迹对得上：${cross.calls} 条 dida 调用 / ${cross.shapeCalls} 次 PowerShell`,
+      inconsistent: `- **与轨迹对不上**：只有 ${cross.calls} 条 dida 调用，轨迹里却有 ${cross.shapeCalls} 次 PowerShell；可能有调用绕过了 shim`,
+      indeterminate: '- **无法比对**：轨迹里没有可解析的事件，判断不了调用是否都被记录',
+    }[status];
+    if (line) lines.push(line);
   }
   lines.push(`- 沙箱${manifest.sandboxRetained === false ? '已删除' : '保留'}：${manifest.sandbox}`);
 

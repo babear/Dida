@@ -54,15 +54,32 @@ export async function runAssert(assertionFn, input) {
   };
 }
 
-// 一条 scenario 的结局判定。三类的分界照 ADR-0012：用例缺陷判 broken（去修用例），
-// 结果不可归因判 invalid（重跑），断言不通过判 failed（去改 skill）。
-export async function decideAssertion({ completed, stateFailed = false, stateError = null, assertionFn, input }) {
+// 一条 scenario 的结局判定。四类的分界照 ADR-0012：用例缺陷判 broken（去修用例），
+// 结果不可用判 invalid（看 cause 决定重跑还是查代码），断言不通过判 failed（去改 skill）。
+// 可信度检查排在最前，包括会话没正常结束时：一张「会话未正常结束」的报告会盖掉
+// 「调用绕过了 shim」这个更严重的事实，而后者恰恰可能是会话没跑完的原因。
+export async function decideAssertion({
+  completed, crossCheck = null, stateFailed = false, stateError = null, assertionFn, input,
+}) {
+  if (crossCheck?.status && crossCheck.status !== 'consistent') {
+    const summary = crossCheck.detail ?? '';
+    return {
+      status: 'invalid',
+      cause: crossCheck.status === 'inconsistent' ? 'cross-check' : 'indeterminate',
+      detail: crossCheck.status === 'inconsistent'
+        ? `调用日志与轨迹对不上：${summary}。先查明是偶发还是系统性绕过，重跑不一定能解决。`
+        : `轨迹读不出可解析的事件，无从比对：${summary}。先查明轨迹为什么是空的，重跑不一定能解决。`,
+      results: [{ ok: false, name: '可信度检查', expected: '调用都能归因', actual: summary }],
+    };
+  }
+
   if (!completed) return { status: 'skipped', results: [] };
 
   if (stateFailed) {
     return {
       status: 'invalid',
-      detail: `取终态快照失败：${stateError}`,
+      cause: 'state',
+      detail: `取终态快照失败：${stateError}。这是基础设施故障，重跑一次。`,
       results: [{ ok: false, name: '终态快照不可用', expected: '能列出测试清单', actual: stateError }],
     };
   }
