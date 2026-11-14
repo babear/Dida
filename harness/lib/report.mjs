@@ -76,9 +76,8 @@ function evaluatedBlock(evaluated) {
   } else if (evaluated.status === 'broken') {
     lines.push(`用例配置错误：${evaluated.detail ?? '断言模块没给出结果数组'}`);
   } else if (evaluated.status === 'invalid') {
+    // 快照取不到：这时断言模块没跑，evaluated 里只有快照那一类结论。
     lines.push(`取不到终态快照，评不了：${evaluated.detail ?? '未知原因'}`);
-  } else {
-    lines.push(`未评断言（${evaluated.status}）。`);
   }
   return lines;
 }

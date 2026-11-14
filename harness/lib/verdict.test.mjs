@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { renderAssertions, renderVerdict } from './report.mjs';
+import { invalidLabel, invalidTitle, renderAssertions, renderVerdict } from './report.mjs';
 
 const SESSION_OK = { exitCode: 0, timedOut: false, turns: 5, costUsd: 0.1 };
 
@@ -147,9 +147,7 @@ test('crossCheck 三态：consistent / inconsistent / indeterminate 各写各的
 
 // 这三个用例钉的是**标题本身**，不是 detail。之前只断 detail 里的词，
 // 把 INVALID_CAUSES 里的标题改错测试仍全绿（变异验证过）。
-import { invalidLabel, invalidTitle } from './report.mjs';
-
-test('三种 cause 的标题各自不同，且不含 detail 里的词', () => {
+test('三种 cause 的标题各自不同', () => {
   assert.match(invalidTitle('cross-check'), /调用日志与轨迹对不上/);
   assert.match(invalidTitle('indeterminate'), /轨迹读不出/);
   assert.match(invalidTitle('state'), /终态快照取不到/);
@@ -169,9 +167,11 @@ test('未知 cause 退回通用标题，不崩', () => {
 });
 
 test('invalidLabel 三种 cause 各自不同，未知退回通用', () => {
-  const labels = ['cross-check', 'indeterminate', 'state'].map(invalidLabel);
-  assert.equal(new Set(labels).size, 3);
+  assert.equal(invalidLabel('cross-check'), '结果不可信');
+  assert.equal(invalidLabel('indeterminate'), '无从判定');
+  assert.equal(invalidLabel('state'), '结果不可用');
   assert.equal(invalidLabel(undefined), '结果不可用');
+  assert.equal(invalidLabel('nonsense'), '结果不可用');
 });
 
 test('可信度失败时报告与判定小节都带出 evaluated 的结论', () => {

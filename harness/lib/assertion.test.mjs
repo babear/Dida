@@ -233,26 +233,31 @@ test('不传 crossCheck（旧调用方）时行为与之前一致', async () => 
 });
 
 test('会话没正常结束但可信度不过时，报可信度失败而不是 skipped——日志不可信是更靠前的事实', async () => {
+  let called = 0;
   const out = await decideAssertion({
     completed: false,
     crossCheck: { status: 'inconsistent', detail: '3 条 dida 调用 / 10 次 PowerShell' },
     stateFailed: false,
-    assertionFn: () => { throw new Error('不该被调用'); },
+    assertionFn: () => { called += 1; return [{ ok: true }]; },
     input: INPUT,
   });
   assert.equal(out.status, 'invalid');
   assert.equal(out.cause, 'cross-check');
+  assert.equal(called, 1, '快照在，断言就要评估');
+  assert.equal(out.evaluated.status, 'passed');
 });
 
 test('会话没正常结束且可信度通过时，仍是 skipped', async () => {
+  let called = 0;
   const out = await decideAssertion({
     completed: false,
     crossCheck: { status: 'consistent', detail: '1 条 dida 调用 / 1 次 PowerShell' },
     stateFailed: false,
-    assertionFn: () => { throw new Error('不该被调用'); },
+    assertionFn: () => { called += 1; return [{ ok: true }]; },
     input: INPUT,
   });
   assert.equal(out.status, 'skipped');
+  assert.equal(called, 1, 'status 是 skipped，但断言照样评估');
 });
 
 // 评论 #33 第 1 条：可信度失败时断言仍要评估，否则一次真实的 skill 回归
@@ -350,5 +355,5 @@ test('可信度与快照同时失败时，快照错误也进 detail，不只活�
   assert.equal(out.status, 'invalid');
   assert.equal(out.cause, 'cross-check');
   assert.match(out.detail, /网络抖动/);
-  assert.equal(out.evaluated, undefined, '没有快照就没有可评的事实');
+  assert.equal(out.evaluated.cause, 'state', '快照失败本身也是一条结论，只是它没跑断言模块');
 });

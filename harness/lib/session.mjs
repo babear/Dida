@@ -82,7 +82,7 @@ export function buildSessionArgv({ prompt, agentsPath }) {
   ];
 }
 
-// 会话是否正常收尾。终态不可归因时断言不评、清场延后、沙箱保留，三处都问这个。
+// 会话是否正常收尾。清场延后、沙箱保留两处都问这个；断言仍会评估（结论不影响 status）。
 export function sessionCompleted(session) {
   return session.exitCode === 0 && !session.timedOut;
 }

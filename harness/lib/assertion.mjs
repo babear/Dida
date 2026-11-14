@@ -66,22 +66,23 @@ export async function decideAssertion({
   completed, crossCheck, stateFailed = false, stateError = null, assertionFn, input,
 }) {
   const crossFailure = crossCheckFailure(crossCheck);
-  // 先算，再决定 status。
-  const evaluated = stateFailed ? null : await runOutcome({ stateFailed, stateError, assertionFn, input });
-  const withEvaluated = (verdict) => (evaluated ? { ...verdict, evaluated } : verdict);
+  // 有快照就一律评估——结论存进 evaluated，不影响最终 status。
+  // 没快照就不调用断言模块（`runOutcome` 只在 stateFailed 为真时走那条路）。
+  const outcome = await runOutcome({ stateFailed, stateError, assertionFn, input });
+  const withOutcome = (verdict) => ({ ...verdict, evaluated: outcome });
 
   if (crossFailure) {
     // 两个都失败时，快照错误本身也是证据，别让它只活在控制台那一行。
     const detail = stateFailed
       ? `${crossFailure.detail}\n另外，终态快照也取不到：${stateError}`
       : crossFailure.detail;
-    return withEvaluated({ ...crossFailure, detail });
+    return withOutcome({ ...crossFailure, detail });
   }
 
   // 会话没跑完：status 是「没正常收尾」而不是「skill 没做到」，结论仍留在 evaluated 里。
-  if (!completed) return withEvaluated({ status: 'skipped', results: [] });
+  if (!completed) return withOutcome({ status: 'skipped', results: [] });
 
-  return evaluated ?? runOutcome({ stateFailed, stateError, assertionFn, input });
+  return outcome;
 }
 
 // 可信度失败时的结论；通过时返回 null。
