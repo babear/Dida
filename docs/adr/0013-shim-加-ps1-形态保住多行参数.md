@@ -1,6 +1,6 @@
 # ADR-0013：shim 增加 `dida.ps1` 形态，多行参数经它保真
 
-- 状态：接受（修订 ADR-0004「不做 `.ps1` 形态」的拒绝理由；ADR-0009 的「转发绕开 cmd」原样保留）
+- 状态：接受（修订 ADR-0004「不做 `.ps1` 形态」的拒绝理由；ADR-0009 的「转发绕开 cmd」原样保留。2026-11-14 复核：「claude 的 PowerShell 工具带 `-ExecutionPolicy Bypass`」成立、无变化，但被测会话实际用 pwsh 7 而非 5.1；另发现两个与执行策略无关的入口缺口，见文末「补充」与 #36、#37）
 - 日期：2026-11-12
 
 ## 背景
@@ -76,3 +76,39 @@ ADR-0004 拒绝 `.ps1` 的理由是「`dida.ps1` 未签名，PowerShell 默认�
 - 多行 `--content` 在按 skill 使用 PowerShell 的正常路径上保真，过程断言可读到完整正文。
 - 显式调用 `dida.cmd`、或用绝对路径直调真 CLI 的调用，多行仍会截断；前者只会由 agent 主动写全名引起，后者本就由 `crossCheck` 标记。
 - 若真 CLI 的安装形态变化（多一份 `.ps1` 同目录），沙箱内仍是我们的 `bin/dida.ps1` 优先，因为 PATH 顺序在前。
+
+## 补充（2026-11-14）：执行策略那条结论复核
+
+来源 [#32](https://github.com/babear/Dida/issues/32)。问的是「被测会话里 PowerShell 是不是带执行策略豁免」，跑了一次真实 `claude -p` 会话，沙箱由 `createSandbox` 真实生成、工具面用 `harness/agents.json`，原始输出见 [#32 评论](https://github.com/babear/Dida/issues/32#issuecomment-6875026097)。
+
+### 实测
+
+| 事实 | 结果 |
+|---|---|
+| `$PSVersionTable.PSVersion` | `7.7.0`（Store/MSIX 版 `pwsh.exe`，**不是** 5.1） |
+| `Get-ExecutionPolicy -List` | `Process = Bypass`，其余 scope `Undefined`，`LocalMachine = RemoteSigned` |
+| 未签名 `.ps1` 直接执行 | 跑起来了，无 `SecurityError` |
+| `SessionState.LanguageMode` | `FullLanguage` |
+
+### 结论：本文第 19 行与第 70 行那两条成立，没有变化
+
+`Process = Bypass` 这个 scope 本身就是证据：机器策略是 `RemoteSigned`，`Process` 却单独是 `Bypass`，说明宿主给这个 shell **显式传了** `-ExecutionPolicy Bypass`，而不是机器恰好宽松。所以「`.cmd` 不是执行策略的兜底」这个风险前提仍然成立，不需要改决定。
+
+距离 2026-11-12 原文的变化只有一处：**被测会话的 shell 是 pwsh 7，不是 5.1。**
+
+### 由此带来的读者须知：5.1 那两节说的不是被测路径
+
+上文「空串参数」与「值里的双引号」两节，把 `powershell.exe` 5.1 的失真写成了重要结论（5.1 丢空串值、5.1 剥双引号）。按本文自己的表，这两项**在 pwsh 7 经 `.ps1` 都是保真的**，而被测会话正是 pwsh 7——所以：
+
+- 那两节**不是错的，也不是多余**：`harness/lib/sandbox.test.mjs` 仍锁着两种 shell 的行为，是边界记录；
+- 但它们**不再命中真实评测路径**。#8 规则 2（`content` 从非空变空）在这条路径上不受它们影响；
+- 原文按「修订保留原文、另加补充」的惯例**未改动**，读者以本段为准。
+
+### 两个与执行策略无关的入口缺口
+
+复核过程中撞出两件更要紧的事，都**不在本文决定的范围**，已各自另开：
+
+- **#36**：`run.mjs` 在 Windows 上因 `Path` / `PATH` 大小写重复键丢掉继承的 PATH，沙箱里裸 `node` 找不到，`dida` 全挂。
+- **#37**：会话一旦拿到 Bash 工具，MSYS 跳过 `bin/` 里的 `.ps1` 与 `.cmd` 直连真 CLI，判定与记账全部失效（实测 `calls.ndjson` 未生成）。
+
+**#37 动摇的是本文「两份壳覆盖全部入口」这个隐含前提**，而不是「`.ps1` 保真」这条结论。当前会话之所以「一直在 PowerShell 上」，是 #36 那个 PATH bug 的副作用（探测不到 Git Bash → PowerShell 工具才启用），不是设计。
