@@ -48,8 +48,6 @@ dida task update $task.id --id $task.id --project inbox --content $body
 dida task get inbox $task.id --json
 ```
 
-PowerShell 若因执行策略拒绝未签名的 `dida.ps1`，把命令里的 `dida` 换成 `dida.cmd`。
-
 已完成的任务不在 `project data` 里；按标题找已完成的任务用 `dida task filter --status=2`。
 
 ## 返回字段
