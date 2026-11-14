@@ -64,24 +64,43 @@ function detailBlock(title, detail, results) {
   return lines.join('\n');
 }
 
+// 可信度失败时断言照样跑了，结论存在 evaluated 里。它不影响 status，但是读者
+// 判断「要不要重跑」的关键证据——一次真实的 skill 回归不该被一句「疑似绕过」盖掉。
+function evaluatedBlock(evaluated) {
+  if (!evaluated) return [];
+  const lines = ['', '### 同一份终态的结局断言（不影响上面的结论）', ''];
+  if (evaluated.status === 'failed') {
+    lines.push('**断言未通过**', '', renderAssertions(evaluated.results ?? []));
+  } else if (evaluated.status === 'passed') {
+    lines.push('结局断言通过。');
+  } else if (evaluated.status === 'broken') {
+    lines.push(`用例配置错误：${evaluated.detail ?? '断言模块没给出结果数组'}`);
+  } else if (evaluated.status === 'invalid') {
+    lines.push(`取不到终态快照，评不了：${evaluated.detail ?? '未知原因'}`);
+  } else {
+    lines.push(`未评断言（${evaluated.status}）。`);
+  }
+  return lines;
+}
+
 // invalid 有三种原因，性质不同：快照取不到是基础设施故障（重跑大概率能好），
 // 可信度失败是防护缺陷或 agent 行为（重跑不一定有用），无从判定则连结论都没有。
 // 标题要能分开——判不出结论时不能说「可能绕过了」，那是在断言一个没观测到的事实。
-const INVALID_TITLES = {
-  'cross-check': '本次结果不可信：调用可能绕过了 shim',
-  indeterminate: '本次结果不可用：轨迹读不出，无从比对',
-  state: '本次结果不可用：终态快照取不到',
+// 报告标题与控制台短标签同表：加一个 cause 只改这一处。
+const INVALID_CAUSES = {
+  'cross-check': { title: '本次结果不可信：调用日志与轨迹对不上', label: '结果不可信' },
+  indeterminate: { title: '本次结果不可用：轨迹读不出，无从比对', label: '无从判定' },
+  state: { title: '本次结果不可用：终态快照取不到', label: '结果不可用' },
 };
 
-// 控制台那一行要短，与报告标题共用同一份 cause 表，避免两处各自加分支。
-const INVALID_LABELS = {
-  'cross-check': '结果不可信',
-  indeterminate: '无从判定',
-  state: '结果不可用',
-};
+const FALLBACK_CAUSE = { title: '本次结果不可用', label: '结果不可用' };
+
+export function invalidTitle(cause) {
+  return (INVALID_CAUSES[cause] ?? FALLBACK_CAUSE).title;
+}
 
 export function invalidLabel(cause) {
-  return INVALID_LABELS[cause] ?? '结果不可用';
+  return (INVALID_CAUSES[cause] ?? FALLBACK_CAUSE).label;
 }
 
 export function renderVerdict({ assertion, session }) {
@@ -97,11 +116,14 @@ export function renderVerdict({ assertion, session }) {
   }
   if (assertion?.status === 'invalid') {
     // 结果不可用，不当作 skill 缺陷（ADR-0012）。旧 manifest 没有 cause，退回通用标题。
-    const title = INVALID_TITLES[assertion.cause] ?? '本次结果不可用';
-    return detailBlock(title, assertion.detail ?? '', assertion.results);
+    const title = invalidTitle(assertion.cause);
+    return [detailBlock(title, assertion.detail ?? '', assertion.results), ...evaluatedBlock(assertion.evaluated)].join('\n');
   }
   if (!sessionCompleted(session ?? {})) {
-    return `${VERDICT_HEADING}\n\n会话未正常结束，不评断言（见「会话」小节的退出码）。`;
+    // 不能写「不评断言」——快照取到时确实评了，结论就在下面。
+    const head = `${VERDICT_HEADING}\n\n会话未正常结束，不据此判定成败（见「会话」小节的退出码）。`;
+    // 快照取到了就仍有一份结局结论：它不影响 status，但能看出 skill 本身有没有做到。
+    return [head, ...evaluatedBlock(assertion?.evaluated)].join('\n');
   }
   if (assertion?.status === 'failed') {
     lines.push('**结局断言 未通过**', '', renderAssertions(assertion.results ?? []));
@@ -180,11 +202,11 @@ export function renderReport(manifest) {
   const cross = manifest.calls?.crossCheck;
   if (cross) {
     // 三态：判不出结论时不能说「对得上」，那是把「不知道」当成「没问题」。
-    // 旧 manifest 只有 consistent 布尔，按它回退——那时没有「判不出」这个概念。
+    // 旧 manifest 只有 consistent 布尔（那时还没有「判不出」这个概念），按它回退。
     const status = cross.status ?? (cross.consistent ? 'consistent' : 'inconsistent');
     const line = {
       consistent: `- 与轨迹对得上：${cross.calls} 条 dida 调用 / ${cross.shapeCalls} 次 PowerShell`,
-      inconsistent: `- **与轨迹对不上**：只有 ${cross.calls} 条 dida 调用，轨迹里却有 ${cross.shapeCalls} 次 PowerShell；可能有调用绕过了 shim`,
+      inconsistent: `- **与轨迹对不上**：${cross.calls} 条 dida 调用 / ${cross.shapeCalls} 次 PowerShell；条数不等不等于有调用没被记录，多出来的可能是文件操作`,
       indeterminate: '- **无法比对**：轨迹里没有可解析的事件，判断不了调用是否都被记录',
     }[status];
     if (line) lines.push(line);

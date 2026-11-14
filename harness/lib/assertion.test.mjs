@@ -232,7 +232,7 @@ test('不传 crossCheck（旧调用方）时行为与之前一致', async () => 
   assert.equal(out.status, 'passed');
 });
 
-test('会话没正常结束但可信度不过时，报可信度失败而不是 skipped——绕过的结论更严重', async () => {
+test('会话没正常结束但可信度不过时，报可信度失败而不是 skipped——日志不可信是更靠前的事实', async () => {
   const out = await decideAssertion({
     completed: false,
     crossCheck: { status: 'inconsistent', detail: '3 条 dida 调用 / 10 次 PowerShell' },
@@ -253,4 +253,102 @@ test('会话没正常结束且可信度通过时，仍是 skipped', async () => 
     input: INPUT,
   });
   assert.equal(out.status, 'skipped');
+});
+
+// 评论 #33 第 1 条：可信度失败时断言仍要评估，否则一次真实的 skill 回归
+// 会被一句「疑似绕过」盖掉；工具面没有 Bash，一次 Get-ChildItem 就足以触发。
+
+test('可信度失败时断言仍被调用，结论留在 evaluated 里', async () => {
+  let called = 0;
+  const out = await decideAssertion({
+    completed: true,
+    crossCheck: { status: 'inconsistent', detail: '3 条 dida 调用 / 4 次 PowerShell' },
+    assertionFn: () => {
+      called += 1;
+      return [{ ok: false, name: '父任务应为 TEXT', expected: 'TEXT', actual: 'CHECKLIST' }];
+    },
+    input: INPUT,
+  });
+  assert.equal(called, 1, '断言模块必须被调用');
+  assert.equal(out.status, 'invalid', '最终 status 仍由可信度决定');
+  assert.equal(out.evaluated.status, 'failed');
+  assert.equal(out.evaluated.results[0].name, '父任务应为 TEXT');
+});
+
+test('可信度失败且断言通过时，evaluated 记录 passed，status 仍是 invalid', async () => {
+  const out = await decideAssertion({
+    completed: true,
+    crossCheck: { status: 'inconsistent', detail: '1 / 2' },
+    assertionFn: () => [{ ok: true, name: 'x' }],
+    input: INPUT,
+  });
+  assert.equal(out.status, 'invalid');
+  assert.equal(out.evaluated.status, 'passed');
+});
+
+test('可信度失败且断言模块抛错时，evaluated 是 broken，不外溢成 status', async () => {
+  const out = await decideAssertion({
+    completed: true,
+    crossCheck: { status: 'indeterminate', detail: '0 / 0' },
+    assertionFn: () => { throw new Error('崩了'); },
+    input: INPUT,
+  });
+  assert.equal(out.status, 'invalid');
+  assert.equal(out.cause, 'indeterminate');
+  assert.equal(out.evaluated.status, 'broken');
+});
+
+// state.json 与 completed 无关：会话没跑完，快照照样落盘，所以结论照样算得出来。
+test('会话没跑完但快照取到了，结局断言仍被评估，status 仍是 skipped', async () => {
+  let called = 0;
+  const out = await decideAssertion({
+    completed: false,
+    crossCheck: { status: 'consistent', detail: '0 / 0' },
+    assertionFn: () => { called += 1; return [{ ok: false, name: 'x' }]; },
+    input: INPUT,
+  });
+  assert.equal(out.status, 'skipped');
+  assert.equal(called, 1);
+  assert.equal(out.evaluated.status, 'failed');
+});
+
+test('会话没跑完且快照也没取到时，不评估——没有事实可评', async () => {
+  let called = 0;
+  const out = await decideAssertion({
+    completed: false,
+    crossCheck: { status: 'consistent', detail: '0 / 0' },
+    stateFailed: true,
+    stateError: '网络抖动',
+    assertionFn: () => { called += 1; return [{ ok: true }]; },
+    input: INPUT,
+  });
+  assert.equal(out.status, 'skipped');
+  assert.equal(called, 0);
+});
+
+test('可信度结果行的 expected 不声称「调用都能归因」——条数不等不等于有调用没被记录', async () => {
+  const out = await decideAssertion({
+    completed: true,
+    crossCheck: { status: 'inconsistent', detail: '3 / 4' },
+    assertionFn: () => [{ ok: true }],
+    input: INPUT,
+  });
+  const row = out.results[0];
+  assert.doesNotMatch(row.expected, /调用都能归因/);
+  assert.match(row.actual, /不等于有调用没被记录/);
+});
+
+test('可信度与快照同时失败时，快照错误也进 detail，不只活在控制台', async () => {
+  const out = await decideAssertion({
+    completed: true,
+    crossCheck: { status: 'inconsistent', detail: '3 / 4' },
+    stateFailed: true,
+    stateError: '网络抖动',
+    assertionFn: () => [{ ok: true }],
+    input: INPUT,
+  });
+  assert.equal(out.status, 'invalid');
+  assert.equal(out.cause, 'cross-check');
+  assert.match(out.detail, /网络抖动/);
+  assert.equal(out.evaluated, undefined, '没有快照就没有可评的事实');
 });

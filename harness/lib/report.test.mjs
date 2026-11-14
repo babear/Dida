@@ -134,11 +134,13 @@ test('报告写明沙箱是保留还是已删除', () => {
   assert.match(renderReport({ ...MANIFEST, sandboxRetained: false }), /已删除/);
 });
 
-test('报告写明调用日志与轨迹是否对得上', () => {
+test('报告写明调用日志与轨迹是否对得上，且不把条数不等说成绕过', () => {
   const ok = renderReport({ ...MANIFEST, calls: { ...MANIFEST.calls, crossCheck: { calls: 12, shapeCalls: 10, consistent: true } } });
   const bad = renderReport({ ...MANIFEST, calls: { ...MANIFEST.calls, crossCheck: { calls: 3, shapeCalls: 10, consistent: false } } });
   assert.match(ok, /对得上/);
-  assert.match(bad, /绕过/);
+  assert.match(bad, /与轨迹对不上/);
+  // 条数不等也可能是文件操作抬高了分母，不能断言成绕过
+  assert.doesNotMatch(bad, /绕过了 shim/);
 });
 
 test('有写命令被拒时，报告与摘要按原因分开写', () => {

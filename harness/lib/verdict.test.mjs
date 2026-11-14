@@ -30,27 +30,6 @@ test('快照取不到（invalid, cause=state）写成「结果不可用」，不
   assert.doesNotMatch(text, /用例配置错误/);
 });
 
-test('可信度失败（invalid, cause=cross-check）的标题指向绕过 shim，与快照失败分开', () => {
-  const crossCheckText = renderVerdict({
-    assertion: {
-      status: 'invalid',
-      cause: 'cross-check',
-      detail: '调用日志与轨迹对不上：3 条 dida 调用 / 10 次 PowerShell。先查明是偶发还是系统性绕过，重跑不一定能解决。',
-      results: [],
-    },
-    session: SESSION_OK,
-  });
-  const stateText = renderVerdict({
-    assertion: { status: 'invalid', cause: 'state', detail: '取终态快照失败：x', results: [] },
-    session: SESSION_OK,
-  });
-  assert.match(crossCheckText, /绕过/);
-  assert.match(crossCheckText, /重跑不一定能解决/);
-  assert.doesNotMatch(crossCheckText, /终态快照/);
-  assert.match(stateText, /终态快照/);
-  assert.doesNotMatch(stateText, /绕过/);
-});
-
 test('旧 manifest 的 invalid 没有 cause 时用通用标题，不崩', () => {
   const text = renderVerdict({
     assertion: { status: 'invalid', detail: '取终态快照失败：x', results: [] },
@@ -117,7 +96,7 @@ test('缺断言写成「用例配置错误」，与「结局断言 未通过」�
   assert.doesNotMatch(failed, /缺断言/);
 });
 
-test('会话没正常结束时不评断言，报告写明会话先失败', () => {
+test('会话没正常结束时不据此判定成败，报告写明会话先失败', () => {
   const text = renderVerdict({
     assertion: { status: 'skipped', results: [] },
     session: { exitCode: 1, timedOut: false },
@@ -164,4 +143,83 @@ test('crossCheck 三态：consistent / inconsistent / indeterminate 各写各的
   const unknown = at('indeterminate');
   assert.match(unknown, /无法比对/);
   assert.doesNotMatch(unknown, /与轨迹对得上/, '不知道有没有问题，不能说没问题');
+});
+
+// 这三个用例钉的是**标题本身**，不是 detail。之前只断 detail 里的词，
+// 把 INVALID_CAUSES 里的标题改错测试仍全绿（变异验证过）。
+import { invalidLabel, invalidTitle } from './report.mjs';
+
+test('三种 cause 的标题各自不同，且不含 detail 里的词', () => {
+  assert.match(invalidTitle('cross-check'), /调用日志与轨迹对不上/);
+  assert.match(invalidTitle('indeterminate'), /轨迹读不出/);
+  assert.match(invalidTitle('state'), /终态快照取不到/);
+  // 三种标题两两不同
+  const titles = ['cross-check', 'indeterminate', 'state'].map(invalidTitle);
+  assert.equal(new Set(titles).size, 3);
+});
+
+test('判不出结论时标题不能说「可能绕过了」——那是在断言没观测到的事实', () => {
+  assert.doesNotMatch(invalidTitle('indeterminate'), /绕过/);
+  assert.doesNotMatch(invalidTitle('state'), /绕过/);
+});
+
+test('未知 cause 退回通用标题，不崩', () => {
+  assert.equal(invalidTitle(undefined), '本次结果不可用');
+  assert.equal(invalidTitle('nonsense'), '本次结果不可用');
+});
+
+test('invalidLabel 三种 cause 各自不同，未知退回通用', () => {
+  const labels = ['cross-check', 'indeterminate', 'state'].map(invalidLabel);
+  assert.equal(new Set(labels).size, 3);
+  assert.equal(invalidLabel(undefined), '结果不可用');
+});
+
+test('可信度失败时报告与判定小节都带出 evaluated 的结论', () => {
+  const text = renderVerdict({
+    assertion: {
+      status: 'invalid',
+      cause: 'cross-check',
+      detail: '调用日志与轨迹对不上：3 / 4',
+      results: [{ ok: false, name: '可信度检查', expected: 'x', actual: 'y' }],
+      evaluated: {
+        status: 'failed',
+        results: [{ ok: false, name: '父任务应为 TEXT', expected: 'TEXT', actual: 'CHECKLIST' }],
+      },
+    },
+    session: SESSION_OK,
+  });
+  assert.match(text, /同一份终态的结局断言/);
+  assert.match(text, /父任务应为 TEXT/);
+  assert.match(text, /CHECKLIST/);
+});
+
+test('没有 evaluated（旧 manifest）时不多出那一节', () => {
+  const text = renderVerdict({
+    assertion: { status: 'invalid', cause: 'state', detail: 'x', results: [] },
+    session: SESSION_OK,
+  });
+  assert.doesNotMatch(text, /同一份终态的结局断言/);
+});
+
+test('会话没正常结束但快照取到了：报告仍带出 evaluated 的结论', () => {
+  const text = renderVerdict({
+    assertion: {
+      status: 'skipped',
+      results: [],
+      evaluated: { status: 'failed', results: [{ ok: false, name: 'x', expected: 1, actual: 2 }] },
+    },
+    session: { exitCode: 1, timedOut: false },
+  });
+  assert.match(text, /会话未正常结束/);
+  assert.match(text, /同一份终态的结局断言/);
+  assert.match(text, /期望 1/);
+});
+
+test('会话没正常结束且没有 evaluated 时不多出那一节', () => {
+  const text = renderVerdict({
+    assertion: { status: 'skipped', results: [] },
+    session: { exitCode: 1, timedOut: false },
+  });
+  assert.match(text, /会话未正常结束/);
+  assert.doesNotMatch(text, /同一份终态的结局断言/);
 });

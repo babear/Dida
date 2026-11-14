@@ -153,3 +153,14 @@ test('credibilityOf：轨迹正常但没调 PowerShell 时是 consistent', () =>
   });
   assert.equal(out.status, 'consistent');
 });
+
+test('credibilityOf：轨迹读不出时 detail 不报未观测到的条数', () => {
+  const out = credibilityOf({
+    calls: [],
+    toolCalls: [],
+    events: [{ type: 'unparseable' }, { type: 'unparseable' }],
+  });
+  assert.equal(out.status, 'indeterminate');
+  assert.doesNotMatch(out.detail, /0 条 dida 调用/);
+  assert.match(out.detail, /2 条事件/);
+});

@@ -76,13 +76,21 @@ function emptyCleanup(overrides = {}) {
 // 一条 run 的可信度结论：三面表的第一面，喂给 decideAssertion。
 // 轨迹一条可解析的事件都没有时，shapeCalls 是 0，与「一次 PowerShell 都没调」看不出区别——
 // 那种运行无从比较，判「无法判定」而不是「一致」。
+//
+// 只产出 status / detail / 条数，不产出 consistent 布尔：三态里「无从判定」时
+// `logged >= shapeCalls` 可能为真，那个布尔与 status 相反，留在 manifest 里会误导读者。
 export function credibilityOf({ calls, toolCalls, events }) {
   const checked = crossCheck(calls, toolCalls);
   const transcriptUsable = events.some((event) => event.type !== 'unparseable');
+  const status = crossCheckStatus(checked, { transcriptUsable });
   return {
-    ...checked,
-    status: crossCheckStatus(checked, { transcriptUsable }),
-    detail: `${checked.calls} 条 dida 调用 / ${checked.shapeCalls} 次 PowerShell`,
+    status,
+    calls: checked.calls,
+    shapeCalls: checked.shapeCalls,
+    // 轨迹读不出时那两个数是 0，报出来等于说「观测到 0 次调用」——那是没观测到的事实。
+    detail: status === 'indeterminate'
+      ? `轨迹 ${events.length} 条事件，没有一条能解析`
+      : `${checked.calls} 条 dida 调用 / ${checked.shapeCalls} 次 PowerShell`,
   };
 }
 
@@ -177,8 +185,7 @@ async function runOne(options, scenario, projects, assertionFn) {
     costUsd: summary.costUsd,
   };
   const completed = sessionCompleted(session);
-  // 四类结局的分界见 decideAssertion 的注释：可信度不过或快照取不到判 invalid、
-  // 用例缺陷判 broken、没做到判 failed。判定本身不抛错，下面的 manifest 与清场总执行。
+  // 五个状态的分界见 decideAssertion 的注释。判定本身不抛错，下面的 manifest 与清场总执行。
   const credibility = credibilityOf({ calls, toolCalls: summary.toolCalls, events });
   const assertion = await decideAssertion({
     completed,
@@ -395,7 +402,7 @@ async function main() {
     // 不会影响下一条的判断。退出码仍非零，让人知道有现场要收。
     const cleanupProblem = hasCleanupProblem(cleanup);
     // 除 passed 外都要非零：failed 是 skill 有缺陷，broken 是用例有缺陷，
-    // invalid 是结果不可用（快照取不到、调用绕过 shim，或轨迹读不出）——三者都要人看一眼，不能安静地算通过。
+    // invalid 是结果不可用（快照取不到、日志与轨迹对不上，或轨迹读不出）——三者都要人看一眼，不能安静地算通过。
     if (!completed || cleanupProblem || manifest.assertion.status !== 'passed') failures += 1;
 
     const verdict = {
@@ -415,11 +422,24 @@ async function main() {
     console.log(manifest.state.error
       ? `  state=未落盘（${manifest.state.error}）`
       : `  state=${path.relative(repoRoot, manifest.state.path)}（${manifest.state.count} 条）`);
-    // invalid 的失败项指向 harness 自己（快照取不到 / 调用绕过了 shim / 轨迹读不出），
+    // invalid 的失败项指向 harness 自己（快照取不到 / 调用日志对不上 / 轨迹读不出），
     // 不是断言不通过——措辞要分开，否则控制台会把基础设施故障或防护缺陷读成 skill 缺陷。
     for (const result of manifest.assertion.results.filter((r) => !r.ok)) {
       const label = manifest.assertion.status === 'invalid' ? invalidLabel(manifest.assertion.cause) : '断言未通过';
       console.error(`    ${label} ${result.name}：期望 ${formatValue(result.expected)}，实际 ${formatValue(result.actual)}`);
+    }
+    // 可信度失败时断言照样跑了，把结论也打出来：否则一次真实的 skill 回归
+    // 在控制台上只剩一句「结果不可信」。
+    const evaluated = manifest.assertion.evaluated;
+    if (evaluated) {
+      if (evaluated.status === 'failed') {
+        console.error('    同一份终态下，结局断言未通过：');
+        for (const result of evaluated.results.filter((r) => !r.ok)) {
+          console.error(`      断言未通过 ${result.name}：期望 ${formatValue(result.expected)}，实际 ${formatValue(result.actual)}`);
+        }
+      } else {
+        console.error(`    同一份终态下，结局断言 ${evaluated.status}（不影响上面的结论）`);
+      }
     }
     reportCleanup(cleanup, run);
     console.log(`  caller marker=${manifest.callerMarker}`);

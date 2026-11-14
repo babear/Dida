@@ -54,27 +54,67 @@ export async function runAssert(assertionFn, input) {
   };
 }
 
-// 一条 scenario 的结局判定。四类的分界照 ADR-0012：用例缺陷判 broken（去修用例），
-// 结果不可用判 invalid（看 cause 决定重跑还是查代码），断言不通过判 failed（去改 skill）。
-// 可信度检查排在最前，包括会话没正常结束时：一张「会话未正常结束」的报告会盖掉
-// 「调用绕过了 shim」这个更严重的事实，而后者恰恰可能是会话没跑完的原因。
+// 一条 scenario 的结局判定，五个状态照 ADR-0012：skipped（会话没跑完）、
+// invalid（结果不可用，看 cause 决定重跑还是查代码）、broken（用例有缺陷）、
+// failed（skill 没做到）、passed。
+//
+// 「评估」与「判定」是两件事（ADR-0012）：只要事实存在就去算，短路只决定最终 status。
+// `state.json` 的写入与会话是否正常结束无关，所以只要快照取到了，结局断言就该评估：
+// 那次运行的断言结论恰恰是最该看到的证据，丢掉它等于把一次真实的 skill 回归
+// 变成一句「疑似绕过」。一次 `Get-ChildItem` 就足以触发可信度检查，这不是偶发代价。
 export async function decideAssertion({
-  completed, crossCheck = null, stateFailed = false, stateError = null, assertionFn, input,
+  completed, crossCheck, stateFailed = false, stateError = null, assertionFn, input,
 }) {
-  if (crossCheck?.status && crossCheck.status !== 'consistent') {
-    const summary = crossCheck.detail ?? '';
-    return {
-      status: 'invalid',
-      cause: crossCheck.status === 'inconsistent' ? 'cross-check' : 'indeterminate',
-      detail: crossCheck.status === 'inconsistent'
-        ? `调用日志与轨迹对不上：${summary}。先查明是偶发还是系统性绕过，重跑不一定能解决。`
-        : `轨迹读不出可解析的事件，无从比对：${summary}。先查明轨迹为什么是空的，重跑不一定能解决。`,
-      results: [{ ok: false, name: '可信度检查', expected: '调用都能归因', actual: summary }],
-    };
+  const crossFailure = crossCheckFailure(crossCheck);
+  // 先算，再决定 status。
+  const evaluated = stateFailed ? null : await runOutcome({ stateFailed, stateError, assertionFn, input });
+  const withEvaluated = (verdict) => (evaluated ? { ...verdict, evaluated } : verdict);
+
+  if (crossFailure) {
+    // 两个都失败时，快照错误本身也是证据，别让它只活在控制台那一行。
+    const detail = stateFailed
+      ? `${crossFailure.detail}\n另外，终态快照也取不到：${stateError}`
+      : crossFailure.detail;
+    return withEvaluated({ ...crossFailure, detail });
   }
 
-  if (!completed) return { status: 'skipped', results: [] };
+  // 会话没跑完：status 是「没正常收尾」而不是「skill 没做到」，结论仍留在 evaluated 里。
+  if (!completed) return withEvaluated({ status: 'skipped', results: [] });
 
+  return evaluated ?? runOutcome({ stateFailed, stateError, assertionFn, input });
+}
+
+// 可信度失败时的结论；通过时返回 null。
+function crossCheckFailure(crossCheck) {
+  if (!crossCheck?.status || crossCheck.status === 'consistent') return null;
+  const summary = crossCheck.detail ?? '';
+  const inconsistent = crossCheck.status === 'inconsistent';
+  return {
+    status: 'invalid',
+    cause: inconsistent ? 'cross-check' : 'indeterminate',
+    detail: inconsistent
+      ? `调用日志与轨迹对不上：${summary}。先查明是偶发还是系统性绕过，重跑不一定能解决。`
+      : `轨迹读不出可解析的事件，无从比对：${summary}。先查明轨迹里为什么没有可解析的行，重跑不一定能解决。`,
+    // 两种 cause 的失败性质不同，各写各的行——用同一句会把没观测到的事实说成观测到了。
+    results: inconsistent
+      ? [{
+        ok: false,
+        name: '可信度检查',
+        // 不写「调用都能归因」那种带结论的期望：条数不等本身说明不了有没有调用没被记录。
+        expected: '日志条数与轨迹里的命令调用数相符',
+        actual: `${summary}（条数不等不等于有调用没被记录，多出来的可能是文件操作）`,
+      }]
+      : [{
+        ok: false,
+        name: '可信度检查',
+        expected: '轨迹里有可解析的事件，能拿来比对',
+        actual: `${summary}——没有比对过条数，也就谈不上对得上对不上`,
+      }],
+  };
+}
+
+// 快照 → 断言。任何一步失败都折成结论，不抛。
+async function runOutcome({ stateFailed, stateError, assertionFn, input }) {
   if (stateFailed) {
     return {
       status: 'invalid',
