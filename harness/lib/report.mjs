@@ -66,11 +66,14 @@ function detailBlock(title, detail, results) {
 
 // 可信度失败时断言照样跑了，结论存在 evaluated 里。它不影响 status，但是读者
 // 判断「要不要重跑」的关键证据——一次真实的 skill 回归不该被一句「疑似绕过」盖掉。
-function evaluatedBlock(evaluated) {
+// interrupted：会话没正常结束，快照取的是终止那一刻的清单，任务可能建了一半。
+function evaluatedBlock(evaluated, { interrupted = false } = {}) {
   if (!evaluated) return [];
   const lines = ['', '### 同一份终态的结局断言（不影响上面的结论）', ''];
   if (evaluated.status === 'failed') {
     lines.push('**断言未通过**', '', renderAssertions(evaluated.results ?? []));
+    // 只有失败才提示：通过时不需要解释为什么它可能不准。
+    if (interrupted) lines.push('', '会话在此终止，清单可能停在半路——失败未必是 skill 没做到。');
   } else if (evaluated.status === 'passed') {
     lines.push('结局断言通过。');
   } else if (evaluated.status === 'broken') {
@@ -122,7 +125,7 @@ export function renderVerdict({ assertion, session }) {
     // 不能写「不评断言」——快照取到时确实评了，结论就在下面。
     const head = `${VERDICT_HEADING}\n\n会话未正常结束，不据此判定成败（见「会话」小节的退出码）。`;
     // 快照取到了就仍有一份结局结论：它不影响 status，但能看出 skill 本身有没有做到。
-    return [head, ...evaluatedBlock(assertion?.evaluated)].join('\n');
+    return [head, ...evaluatedBlock(assertion?.evaluated, { interrupted: true })].join('\n');
   }
   if (assertion?.status === 'failed') {
     lines.push('**结局断言 未通过**', '', renderAssertions(assertion.results ?? []));

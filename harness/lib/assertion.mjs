@@ -31,8 +31,9 @@ function normalizeResult(result, index) {
 
 // 断言抛错、返回非数组、或返回数组里混了坏元素，都折成失败结果：
 // 一次运行要跑出所有失败项，不能因为断言自己写崩了就丢了整场景的结论。
-// evaluated 区分「用例自己算出了结论」与「用例根本没算出来」——后者是用例缺陷，
-// 不是 skill 缺陷，上层要分开判。
+// usable 区分「用例自己算出了结论」与「用例根本没算出来」——后者是用例缺陷，
+// 不是 skill 缺陷，上层要分开判。名字不能叫 evaluated：decideAssertion 返回的
+// `evaluated` 是整个结局判定的结论对象，同文件里同名不同义会读错。
 // 坏元素也算「没算出来」：它指向用例写错了，不是 skill 没做到。用 Array.from
 // 而不是 .map ——稀疏数组的空位在 map 里会被跳过，`new Array(5)` 会让 every
 // 一路放行、直接判通过。
@@ -41,15 +42,15 @@ export async function runAssert(assertionFn, input) {
   try {
     results = await assertionFn(input);
   } catch (error) {
-    return { evaluated: false, results: [{ ok: false, name: '断言执行抛异常', expected: '不抛异常', actual: error.message }] };
+    return { usable: false, results: [{ ok: false, name: '断言执行抛异常', expected: '不抛异常', actual: error.message }] };
   }
   if (!Array.isArray(results)) {
-    return { evaluated: false, results: [{ ok: false, name: '断言应返回数组', expected: '数组', actual: typeof results }] };
+    return { usable: false, results: [{ ok: false, name: '断言应返回数组', expected: '数组', actual: typeof results }] };
   }
   const normalized = Array.from(results, normalizeResult);
   const malformed = normalized.some((result) => result.malformed);
   return {
-    evaluated: !malformed,
+    usable: !malformed,
     results: normalized.map(({ malformed: _ignored, ...result }) => result),
   };
 }
@@ -126,8 +127,8 @@ async function runOutcome({ stateFailed, stateError, assertionFn, input }) {
   }
 
   try {
-    const { evaluated, results } = await runAssert(assertionFn, input);
-    if (!evaluated) {
+    const { usable, results } = await runAssert(assertionFn, input);
+    if (!usable) {
       return { status: 'broken', detail: '断言模块没给出合法的结果数组（抛异常、返回非数组，或元素缺布尔 ok）', results };
     }
     return { status: results.every((result) => result.ok) ? 'passed' : 'failed', results };

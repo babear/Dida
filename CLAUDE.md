@@ -14,6 +14,8 @@ The five canonical triage roles map to same-named labels: `needs-triage`, `needs
 
 Single-context: one `GLOSSARY.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md` for how to read and use them. Before writing to either, read its rules: `~/.claude/skills/domain-modeling/GLOSSARY-FORMAT.md` and `ADR-FORMAT.md`.
 
+**Changing `GLOSSARY.md` or anything under `docs/adr/` requires running `/grill-with-docs` first.** The glossary and ADRs are the project's agreed vocabulary and decisions, not a scratch pad for whatever the current change implies — a wording edit there redefines terms other docs and code rely on. Grill the change before writing it.
+
 ## Workflow
 
 Write PR bodies with `/pr` — "push and open a PR", "open a PR", "write the PR description" all trigger it.

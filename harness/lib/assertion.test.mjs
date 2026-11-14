@@ -41,34 +41,34 @@ test('断言函数原样收到 tasks / created / calls / session', async (t) => 
     t,
     'export default function assert(input) { return [{ ok: true, name: "input", expected: input.tasks.length, actual: input.tasks.length }]; }\n',
   );
-  const { evaluated, results } = await runAssert(await loadAssert(dir), INPUT);
-  assert.equal(evaluated, true);
+  const { usable, results } = await runAssert(await loadAssert(dir), INPUT);
+  assert.equal(usable, true);
   assert.deepEqual(results, [{ ok: true, name: 'input', expected: 1, actual: 1 }]);
 });
 
 test('断言返回空数组即通过', async () => {
-  const { evaluated, results } = await runAssert(() => [], INPUT);
-  assert.equal(evaluated, true);
+  const { usable, results } = await runAssert(() => [], INPUT);
+  assert.equal(usable, true);
   assert.deepEqual(results, []);
 });
 
-test('断言模块抛异常时标 evaluated=false，并说明原因', async () => {
-  const { evaluated, results } = await runAssert(() => {
+test('断言模块抛异常时标 usable=false，并说明原因', async () => {
+  const { usable, results } = await runAssert(() => {
     throw new Error('t.title 是 undefined');
   }, INPUT);
-  assert.equal(evaluated, false);
+  assert.equal(usable, false);
   assert.match(results[0].actual, /t\.title 是 undefined/);
 });
 
-test('断言返回的不是数组时标 evaluated=false', async () => {
-  const { evaluated, results } = await runAssert(() => ({ ok: true }), INPUT);
-  assert.equal(evaluated, false);
+test('断言返回的不是数组时标 usable=false', async () => {
+  const { usable, results } = await runAssert(() => ({ ok: true }), INPUT);
+  assert.equal(usable, false);
   assert.match(results[0].name, /数组/);
 });
 
 test('数组里混了 null / undefined 时归一成失败项，且标成「用例写错了」而不是断言失败', async () => {
-  const { evaluated, results } = await runAssert(() => [null, undefined, { ok: true, name: '正常' }], INPUT);
-  assert.equal(evaluated, false, '元素形状不对指向用例，不是 skill 没做到');
+  const { usable, results } = await runAssert(() => [null, undefined, { ok: true, name: '正常' }], INPUT);
+  assert.equal(usable, false, '元素形状不对指向用例，不是 skill 没做到');
   assert.equal(results.length, 3);
   assert.match(results[0].name, /第 1 项/);
   assert.match(results[1].name, /第 2 项/);
@@ -80,8 +80,8 @@ test('数组里混了 null / undefined 时归一成失败项，且标成「用�
 });
 
 test('稀疏数组不能一条断言都没跑就判通过', async () => {
-  const { evaluated, results } = await runAssert(() => new Array(5), INPUT);
-  assert.equal(evaluated, false, 'new Array(5) 是空位数组，不是「零条断言」');
+  const { usable, results } = await runAssert(() => new Array(5), INPUT);
+  assert.equal(usable, false, 'new Array(5) 是空位数组，不是「零条断言」');
   assert.equal(results.length, 5, '每个空位都要变成一条失败项');
   assert.equal(results.some((_, index) => !(index in results)), false, '不应残留空位');
   assert.equal(results.every((result) => result.ok), false);

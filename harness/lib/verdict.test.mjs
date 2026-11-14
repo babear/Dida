@@ -223,3 +223,39 @@ test('会话没正常结束且没有 evaluated 时不多出那一节', () => {
   assert.match(text, /会话未正常结束/);
   assert.doesNotMatch(text, /同一份终态的结局断言/);
 });
+
+test('会话中断导致断言失败时，报告提示「清单可能停在半路」', () => {
+  const text = renderVerdict({
+    assertion: {
+      status: 'skipped',
+      results: [],
+      evaluated: { status: 'failed', results: [{ ok: false, name: 'x', expected: 1, actual: 0 }] },
+    },
+    session: { exitCode: 1, timedOut: false },
+  });
+  assert.match(text, /会话在此终止/);
+  assert.match(text, /未必是 skill 没做到/);
+});
+
+test('会话中断但断言通过时不加那条提示——通过不需要解释', () => {
+  const text = renderVerdict({
+    assertion: { status: 'skipped', results: [], evaluated: { status: 'passed', results: [] } },
+    session: { exitCode: 1, timedOut: false },
+  });
+  assert.doesNotMatch(text, /会话在此终止/);
+  assert.match(text, /结局断言通过/);
+});
+
+test('可信度失败（会话正常结束）时也不加那条提示', () => {
+  const text = renderVerdict({
+    assertion: {
+      status: 'invalid',
+      cause: 'cross-check',
+      detail: 'x',
+      results: [],
+      evaluated: { status: 'failed', results: [{ ok: false, name: 'y', expected: 1, actual: 0 }] },
+    },
+    session: SESSION_OK,
+  });
+  assert.doesNotMatch(text, /会话在此终止/);
+});
