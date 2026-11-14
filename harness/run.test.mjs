@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { hasCleanupProblem, writeManifest, writeUnusableRun } from './run.mjs';
+import { credibilityOf, hasCleanupProblem, writeManifest, writeUnusableRun } from './run.mjs';
 
 function tmpRepo(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'run-test-'));
@@ -110,4 +110,57 @@ test('两个字段指向同一个对象不算环，值要原样留下', (t) => {
   const text = fs.readFileSync(path.join(dir, 'manifest.json'), 'utf8');
   assert.doesNotMatch(text, /循环引用/, '共享引用是正常数据');
   assert.match(text, /"kind": "TEXT"/);
+});
+
+// 接线测试：runOne 不导出，这层覆盖「crossCheck → 三态 → detail」的组装，
+// 免得 run.mjs 里接错时单测仍全绿。
+
+test('credibilityOf：日志条数够时判 consistent', () => {
+  const out = credibilityOf({
+    calls: [{ argv: ['task', 'get'] }, { argv: ['project', 'list'] }],
+    toolCalls: [{ name: 'PowerShell' }, { name: 'PowerShell' }],
+    events: [{ type: 'assistant' }],
+  });
+  assert.equal(out.status, 'consistent');
+  assert.equal(out.detail, '2 条 dida 调用 / 2 次 PowerShell');
+  assert.equal(out.calls, 2);
+});
+
+test('credibilityOf：日志少于轨迹里的 PowerShell 次数时判 inconsistent', () => {
+  const out = credibilityOf({
+    calls: [{ argv: ['task', 'get'] }],
+    toolCalls: [{ name: 'PowerShell' }, { name: 'PowerShell' }, { name: 'PowerShell' }],
+    events: [{ type: 'assistant' }],
+  });
+  assert.equal(out.status, 'inconsistent');
+  assert.equal(out.detail, '1 条 dida 调用 / 3 次 PowerShell');
+});
+
+test('credibilityOf：轨迹一条可解析事件都没有时判 indeterminate，不是 consistent', () => {
+  const out = credibilityOf({
+    calls: [],
+    toolCalls: [],
+    events: [{ type: 'unparseable' }, { type: 'unparseable' }],
+  });
+  assert.equal(out.status, 'indeterminate');
+});
+
+test('credibilityOf：轨迹正常但没调 PowerShell 时是 consistent', () => {
+  const out = credibilityOf({
+    calls: [],
+    toolCalls: [{ name: 'Read' }],
+    events: [{ type: 'assistant' }],
+  });
+  assert.equal(out.status, 'consistent');
+});
+
+test('credibilityOf：轨迹读不出时 detail 不报未观测到的条数', () => {
+  const out = credibilityOf({
+    calls: [],
+    toolCalls: [],
+    events: [{ type: 'unparseable' }, { type: 'unparseable' }],
+  });
+  assert.equal(out.status, 'indeterminate');
+  assert.doesNotMatch(out.detail, /0 条 dida 调用/);
+  assert.match(out.detail, /2 条事件/);
 });

@@ -31,8 +31,9 @@ function normalizeResult(result, index) {
 
 // 断言抛错、返回非数组、或返回数组里混了坏元素，都折成失败结果：
 // 一次运行要跑出所有失败项，不能因为断言自己写崩了就丢了整场景的结论。
-// evaluated 区分「用例自己算出了结论」与「用例根本没算出来」——后者是用例缺陷，
-// 不是 skill 缺陷，上层要分开判。
+// usable 区分「用例自己算出了结论」与「用例根本没算出来」——后者是用例缺陷，
+// 不是 skill 缺陷，上层要分开判。名字不能叫 evaluated：decideAssertion 返回的
+// `evaluated` 是整个结局判定的结论对象，同文件里同名不同义会读错。
 // 坏元素也算「没算出来」：它指向用例写错了，不是 skill 没做到。用 Array.from
 // 而不是 .map ——稀疏数组的空位在 map 里会被跳过，`new Array(5)` 会让 every
 // 一路放行、直接判通过。
@@ -41,35 +42,93 @@ export async function runAssert(assertionFn, input) {
   try {
     results = await assertionFn(input);
   } catch (error) {
-    return { evaluated: false, results: [{ ok: false, name: '断言执行抛异常', expected: '不抛异常', actual: error.message }] };
+    return { usable: false, results: [{ ok: false, name: '断言执行抛异常', expected: '不抛异常', actual: error.message }] };
   }
   if (!Array.isArray(results)) {
-    return { evaluated: false, results: [{ ok: false, name: '断言应返回数组', expected: '数组', actual: typeof results }] };
+    return { usable: false, results: [{ ok: false, name: '断言应返回数组', expected: '数组', actual: typeof results }] };
   }
   const normalized = Array.from(results, normalizeResult);
   const malformed = normalized.some((result) => result.malformed);
   return {
-    evaluated: !malformed,
+    usable: !malformed,
     results: normalized.map(({ malformed: _ignored, ...result }) => result),
   };
 }
 
-// 一条 scenario 的结局判定。三类的分界照 ADR-0012：用例缺陷判 broken（去修用例），
-// 结果不可归因判 invalid（重跑），断言不通过判 failed（去改 skill）。
-export async function decideAssertion({ completed, stateFailed = false, stateError = null, assertionFn, input }) {
-  if (!completed) return { status: 'skipped', results: [] };
+// 一条 scenario 的结局判定，五个状态照 ADR-0012：skipped（会话没跑完）、
+// invalid（结果不可用，看 cause 决定重跑还是查代码）、broken（用例有缺陷）、
+// failed（skill 没做到）、passed。
+//
+// 「评估」与「判定」是两件事（ADR-0012）：只要事实存在就去算，短路只决定最终 status。
+// `state.json` 的写入与会话是否正常结束无关，所以只要快照取到了，结局断言就该评估：
+// 那次运行的断言结论恰恰是最该看到的证据，丢掉它等于把一次真实的 skill 回归
+// 变成一句「疑似绕过」。一次 `Get-ChildItem` 就足以触发可信度检查，这不是偶发代价。
+export async function decideAssertion({
+  completed, crossCheck, stateFailed = false, stateError = null, assertionFn, input,
+}) {
+  const crossFailure = crossCheckFailure(crossCheck);
+  // 有快照就一律评估——结论存进 evaluated，不影响最终 status。
+  // 没快照就不调用断言模块（`runOutcome` 只在 stateFailed 为真时走那条路）。
+  const outcome = await runOutcome({ stateFailed, stateError, assertionFn, input });
+  const withOutcome = (verdict) => ({ ...verdict, evaluated: outcome });
 
+  if (crossFailure) {
+    // 两个都失败时，快照错误本身也是证据，别让它只活在控制台那一行。
+    const detail = stateFailed
+      ? `${crossFailure.detail}\n另外，终态快照也取不到：${stateError}`
+      : crossFailure.detail;
+    return withOutcome({ ...crossFailure, detail });
+  }
+
+  // 会话没跑完：status 是「没正常收尾」而不是「skill 没做到」，结论仍留在 evaluated 里。
+  if (!completed) return withOutcome({ status: 'skipped', results: [] });
+
+  return outcome;
+}
+
+// 可信度失败时的结论；通过时返回 null。
+function crossCheckFailure(crossCheck) {
+  if (!crossCheck?.status || crossCheck.status === 'consistent') return null;
+  const summary = crossCheck.detail ?? '';
+  const inconsistent = crossCheck.status === 'inconsistent';
+  return {
+    status: 'invalid',
+    cause: inconsistent ? 'cross-check' : 'indeterminate',
+    detail: inconsistent
+      ? `调用日志与轨迹对不上：${summary}。先查明是偶发还是系统性绕过，重跑不一定能解决。`
+      : `轨迹读不出可解析的事件，无从比对：${summary}。先查明轨迹里为什么没有可解析的行，重跑不一定能解决。`,
+    // 两种 cause 的失败性质不同，各写各的行——用同一句会把没观测到的事实说成观测到了。
+    results: inconsistent
+      ? [{
+        ok: false,
+        name: '可信度检查',
+        // 不写「调用都能归因」那种带结论的期望：条数不等本身说明不了有没有调用没被记录。
+        expected: '日志条数与轨迹里的命令调用数相符',
+        actual: `${summary}（条数不等不等于有调用没被记录，多出来的可能是文件操作）`,
+      }]
+      : [{
+        ok: false,
+        name: '可信度检查',
+        expected: '轨迹里有可解析的事件，能拿来比对',
+        actual: `${summary}——没有比对过条数，也就谈不上对得上对不上`,
+      }],
+  };
+}
+
+// 快照 → 断言。任何一步失败都折成结论，不抛。
+async function runOutcome({ stateFailed, stateError, assertionFn, input }) {
   if (stateFailed) {
     return {
       status: 'invalid',
-      detail: `取终态快照失败：${stateError}`,
+      cause: 'state',
+      detail: `取终态快照失败：${stateError}。这是基础设施故障，重跑一次。`,
       results: [{ ok: false, name: '终态快照不可用', expected: '能列出测试清单', actual: stateError }],
     };
   }
 
   try {
-    const { evaluated, results } = await runAssert(assertionFn, input);
-    if (!evaluated) {
+    const { usable, results } = await runAssert(assertionFn, input);
+    if (!usable) {
       return { status: 'broken', detail: '断言模块没给出合法的结果数组（抛异常、返回非数组，或元素缺布尔 ok）', results };
     }
     return { status: results.every((result) => result.ok) ? 'passed' : 'failed', results };
