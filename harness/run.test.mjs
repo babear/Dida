@@ -13,6 +13,7 @@ import {
   stateLine,
   takeState,
   verdictLines,
+  withPrependedPath,
   writeManifest,
   writeUnusableRun,
 } from './run.mjs';
@@ -318,4 +319,27 @@ test('通过的运行被 --hold 留下时也进汇总理清单——现场确实
 
 test('没有保留现场时也不写清单', () => {
   assert.deepEqual(retainedSummaryLines([]), []);
+});
+
+// #36：Windows 继承来的键名大小写不定（通常是 `Path`）。写一个固定的 `PATH` 会在对象里
+// 造出两个同义键，spawn 时后者胜出、继承的 PATH 整个丢掉——沙箱里裸 node 就找不到了。
+test('PATH 前置复用已有的那个键，不新造同名不同大小写的键', () => {
+  const inherited = 'C:\\Windows\\System32;C:\\Other';
+  for (const key of ['Path', 'PATH', 'path']) {
+    const env = withPrependedPath({ [key]: inherited }, 'C:\\sandbox\\bin');
+    const pathKeys = Object.keys(env).filter((name) => name.toUpperCase() === 'PATH');
+    assert.deepEqual(pathKeys, [key], `键名 ${key} 下不该多出一个：${pathKeys.join(',')}`);
+    assert.equal(env[key], `C:\\sandbox\\bin${path.delimiter}${inherited}`, '继承的 PATH 必须接在 binDir 后面');
+  }
+});
+
+test('没有 path 类键时才新建 PATH', () => {
+  const env = withPrependedPath({ HOME: '/home/x' }, '/sandbox/bin');
+  assert.equal(env.PATH, `/sandbox/bin${path.delimiter}`);
+});
+
+test('前置不改动传入的对象', () => {
+  const source = { Path: 'C:\\Windows' };
+  withPrependedPath(source, 'C:\\bin');
+  assert.deepEqual(source, { Path: 'C:\\Windows' });
 });
