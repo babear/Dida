@@ -25,6 +25,11 @@ export function appendCall(callLogPath, record) {
 // 日志条数少于轨迹里的命令调用数，说明**可能**有调用绕过了 shim；但条数不等也可能是
 // 非 dida 的命令（Get-ChildItem、New-Item 等）抬高了分母。判据分不清这两种，见 #18。
 // 被拒绝的调用也算一条——它确实发生过，只是没转发。
+//
+// `shapeCalls` 只数 PowerShell，依赖「工具面里只有 PowerShell 能执行命令」这个前提
+// （由 harness/agents.json 保证，run.test.mjs 里锁着）。工具面若放进了 Bash，
+// 这里恒为 0、`logged >= 0` 永远成立，可信度检查会把全量绕过判成 consistent
+// ——不是丢信号，是给假绿灯。改工具面前先看那条测试。
 export function crossCheck(calls, toolCalls) {
   const logged = calls.filter((call) => !call.unparseable).length;
   const shapeCalls = (toolCalls ?? []).filter((call) => call.name === 'PowerShell').length;

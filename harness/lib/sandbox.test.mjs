@@ -6,8 +6,19 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { createSandbox, renderGuardConfig, writeShim } from './sandbox.mjs';
+import { toolFaceOf } from './session.mjs';
 
 const PROJECTS = ['69abc459ebbdbd00000009f0', '59f736cae4b060e424059e3b'];
+
+// 工具面不含 Bash 是 harness 的核心前提之一，不是可选配置：
+//   - shim 只做了 .ps1 与 .cmd 两份形态，Bash 会走 MSYS 解析、跳过两者直连真 CLI（#37）；
+//   - crossCheck 的 shapeCalls 只数 PowerShell，Bash 进来会让可信度检查恒判 consistent。
+// 所以想加 Bash 的人必须先在这里看见后果，而不是改一行 agents.json 就静默生效。
+test('agents.json 的工具面不含 Bash：shim 覆盖不到它，可信度检查也会失真', () => {
+  const tools = toolFaceOf(path.join(import.meta.dirname, '..', 'agents.json'));
+  assert.ok(!tools.includes('Bash'), `工具面里出现了 Bash：${tools.join(',')}；见 #37 与 calllog.mjs 的 crossCheck`);
+  assert.ok(tools.includes('PowerShell'), '工具面必须含 PowerShell：它是唯一能执行命令的工具');
+});
 
 // npm 生成的 .cmd 模板，parseCmdShim 要从中解析出 node 与脚本入口。
 const REAL_CMD = [

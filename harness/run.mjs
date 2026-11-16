@@ -69,6 +69,13 @@ function realDida() {
   };
 }
 
+// PATH 前置一个目录，复用已有的那个 path 键（Windows 上键名大小写不定，见 #36）。
+// 找不到才新建 `PATH`：非 Windows 平台继承来的通常就是它。
+export function withPrependedPath(env, dir) {
+  const key = Object.keys(env).find((name) => name.toUpperCase() === 'PATH') ?? 'PATH';
+  return { ...env, [key]: `${dir}${path.delimiter}${env[key] ?? ''}` };
+}
+
 function emptyCleanup(overrides = {}) {
   return { deleted: [], failed: [], remaining: [], mismatched: [], ...overrides };
 }
@@ -217,8 +224,13 @@ async function runOne(options, scenario, projects, assertionFn) {
     agentsPath: sandbox.agentsPath,
   });
 
-  const env = { ...sanitizeEnv(process.env), CLAUDE_CONFIG_DIR: sandbox.configDir };
-  env.PATH = `${sandbox.binDir}${path.delimiter}${env.PATH ?? ''}`;
+  // Windows 继承来的键名大小写不定（可能是 `Path`），直接写 `env.PATH` 会新增一个同名
+  // 不同大小写的键，spawn 时后者胜出、继承的 PATH 整个丢掉：沙箱里裸 node 就找不到了。
+  // 必须复用已有的那个键。见 #36。
+  const env = withPrependedPath(
+    { ...sanitizeEnv(process.env), CLAUDE_CONFIG_DIR: sandbox.configDir },
+    sandbox.binDir,
+  );
   // shim 靠这两个环境变量定位本 run 的账本。测试清单集合不走环境变量：
   // 被测 agent 能读也能改进程环境，白名单必须烘焙在沙箱配置里。
   env.DIDA_CALL_LOG = callLogPath;

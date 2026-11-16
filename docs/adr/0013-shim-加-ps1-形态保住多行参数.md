@@ -1,6 +1,6 @@
 # ADR-0013：shim 增加 `dida.ps1` 形态，多行参数经它保真
 
-- 状态：接受（修订 ADR-0004「不做 `.ps1` 形态」的拒绝理由；ADR-0009 的「转发绕开 cmd」原样保留。2026-11-14 复核：「claude 的 PowerShell 工具带 `-ExecutionPolicy Bypass`」成立、无变化，但被测会话实际用 pwsh 7 而非 5.1；另发现两个与执行策略无关的入口缺口，见文末「补充」与 #36、#37）
+- 状态：接受（修订 ADR-0004「不做 `.ps1` 形态」的拒绝理由；ADR-0009 的「转发绕开 cmd」原样保留。2026-11-14 复核：「claude 的 PowerShell 工具带 `-ExecutionPolicy Bypass`」成立、无变化，但被测会话实际用 pwsh 7 而非 5.1；另发现两个与执行策略无关的入口缺口，见文末「补充」与 #36、#37。2026-11-16 补充：那两节里「一直在 PowerShell 上是 PATH 的副作用」被推翻，改判为「只投入 `.ps1`、`.cmd` 不投入」，并据此关闭 #36、#37、#29，`--` 拆到 #48）
 - 日期：2026-11-12
 
 ## 背景
@@ -112,3 +112,40 @@ ADR-0004 拒绝 `.ps1` 的理由是「`dida.ps1` 未签名，PowerShell 默认�
 - **#37**：会话一旦拿到 Bash 工具，MSYS 跳过 `bin/` 里的 `.ps1` 与 `.cmd` 直连真 CLI，判定与记账全部失效（实测 `calls.ndjson` 未生成）。
 
 **#37 动摇的是本文「两份壳覆盖全部入口」这个隐含前提**，而不是「`.ps1` 保真」这条结论。当前会话之所以「一直在 PowerShell 上」，是 #36 那个 PATH bug 的副作用（探测不到 Git Bash → PowerShell 工具才启用），不是设计。
+
+> 上面这段最后一句**已被 2026-11-16 的补充推翻**：工具面与 PATH 无关，见下。
+
+## 补充（2026-11-16）：只投入 `.ps1`，与三条 issue 的最终处置
+
+上一条补充留下的两个缺口各自查清了，结论改变了本文「两份壳」的定位。
+
+### 「一直在 PowerShell 上」不是 PATH 的副作用
+
+上面的推测不成立。工具面由 `harness/agents.json` 的字面量决定：用 harness 的真实参数（`--allowedTools` + agents.json）起一次会话，`init` 事件返回 `["Skill","PowerShell","Read","Glob","Grep","Write"]`——**本来就没有 Bash**。`--allowedTools` 只是白名单，不扩大工具集；能扩大的是 `--tools`。
+
+所以 #37 描述的故障在「不引进 Bash」的前提下不会发生。**#37 已关闭**，防线下到代码里：
+
+- `harness/lib/sandbox.test.mjs` 新增「工具面不含 Bash」用例；
+- `harness/lib/calllog.mjs` 的 `shapeCalls` 旁补了注释：它只数 PowerShell，工具面若放进 Bash，`logged >= 0` 恒真，可信度检查会把全量绕过判成 `consistent`。
+
+### #36 已修，`.ps1` 壳不再依赖 PATH
+
+`run.mjs` 的 PATH 前置改为复用已有的那个键（`withPrependedPath`），不再新造 `PATH`。同时 `renderPs1Shim` 把裸 `node` 换成 `process.execPath` 的绝对路径：壳不该依赖 PATH 上恰好有 node。
+
+### 决定：只投入 `.ps1`，`.cmd` 不投入
+
+**`.cmd` 壳仍然生成**（agent 显式写 `dida.cmd` 时它还在），但**不为它修任何东西**，也不靠它兜底执行策略。理由：
+
+- 唯一会走到 `.cmd` 的是 agent 主动写全名，不是设计路径；
+- 它的失真（多行截断、空串丢值、长参数上限更窄）shim 层改不了，根因在 cmd.exe 的解析。
+
+由此 **#29 已关闭**，其中各项的处置：
+
+| 项 | 结论 |
+|---|---|
+| 多行 `--content` 经 `.ps1` | 已由 #13 解决 |
+| `.cmd` 多行截断、长参数上限 | 作废（不投入这条入口） |
+| `.ps1` 长参数上限（约 32760 字符） | 不做。实测 30000 通过、33000 直接崩，是 Windows `CreateProcess` 的硬上限 |
+| **`--` 经 `.ps1` 消失** | **仍在，已拆到 #48** |
+
+`--` 那一条与 cmd 无关：它是 PowerShell 自己的参数终止符语义，就发生在主力路径上。`-Command` 模式下 `dida task delete -- projA t1` 到达 shim 是 `["task","delete","projA","t1"]`，因此 `guard.mjs` 的「`--` 之后一律当位置参数」在真实路径上永远收不到。**这是本文「`.ps1` 保多行」结论之外的另一类参数失真，不在本文的修复范围内。**

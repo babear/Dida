@@ -29,7 +29,7 @@ shim 记下的 `dida` 调用序列，`runs/<runId>/calls.ndjson`，每行一条 
 _Avoid_: 记录、shim 日志
 
 **工具面**:
-被测 agent 启动时被授予的工具名集合。本项目的工具面是 `Skill`、`PowerShell`、`Read`、`Glob`、`Grep`、`Write`。
+被测 agent 启动时被授予的工具名集合，由 `harness/agents.json` 定义。本项目的工具面是 `Skill`、`PowerShell`、`Read`、`Glob`、`Grep`、`Write`；**不含 `Bash`**——shim 没有 bash 形态，且可信度检查只数 `PowerShell`（见 #37）。
 _Avoid_: 工具箱、权限、allowedTools（除非指命令行参数）
 
 **shell**:
@@ -37,11 +37,11 @@ _Avoid_: 工具箱、权限、allowedTools（除非指命令行参数）
 _Avoid_: 终端、命令行
 
 **可执行形态**:
-同一条命令的不同可执行文件，如 `dida.cmd`、`dida.ps1` 与无后缀的 `dida`。shim 有 `.ps1` 与 `.cmd` 两份形态。
+同一条命令的不同可执行文件，如 `dida.cmd`、`dida.ps1` 与无后缀的 `dida`。shim 有 `.ps1` 与 `.cmd` 两份形态，**只投入 `.ps1`**（PowerShell 同目录内优先命中它，且它保多行参数）；`.cmd` 不投入、不修、不兜底执行策略。
 _Avoid_: 版本、变体、入口
 
 **shim**:
-`PATH` 前置目录里的同名 `dida` 可执行文件（`.ps1` 与 `.cmd` 两份形态，PowerShell 优先命中 `.ps1`），由工具面上的 `PowerShell` 调用，透明转发给真 CLI，同时记账并拒绝越界写入。
+`PATH` 前置目录里的同名 `dida` 可执行文件，由工具面上的 `PowerShell` 经 `dida.ps1` 调用，透明转发给真 CLI，同时记账并拒绝越界写入。`.ps1` 壳用绝对路径的 node，不依赖 PATH。
 _Avoid_: mock、桩、代理、wrapper
 
 **调用方标记**:
