@@ -3,12 +3,9 @@ import assert from 'node:assert/strict';
 
 import { INCOMPLETE_FACT, invalidLabel, invalidTitle, renderAssertions, renderVerdict } from './report.mjs';
 
-const SESSION_OK = { exitCode: 0, timedOut: false, turns: 5, costUsd: 0.1 };
-
 test('断言全过时报告写「通过」，不点名任何断言', () => {
   const text = renderVerdict({
     assertion: { status: 'passed', results: [{ ok: true, name: '父任务正文非空', expected: '非空', actual: '非空' }] },
-    session: SESSION_OK,
   });
   assert.match(text, /结局断言 通过/);
   assert.doesNotMatch(text, /父任务正文非空/);
@@ -22,7 +19,6 @@ test('快照取不到（invalid, cause=state）写成「结果不可用」，不
       detail: '取终态快照失败：列清单 p 的任务失败：网络抖动。这是基础设施故障，重跑一次。',
       results: [{ ok: false, name: '终态快照不可用', expected: '能列出测试清单', actual: '网络抖动' }],
     },
-    session: SESSION_OK,
   });
   assert.match(text, /不可用/);
   assert.match(text, /网络抖动/);
@@ -33,7 +29,6 @@ test('快照取不到（invalid, cause=state）写成「结果不可用」，不
 test('旧 manifest 的 invalid 没有 cause 时用通用标题，不崩', () => {
   const text = renderVerdict({
     assertion: { status: 'invalid', detail: '取终态快照失败：x', results: [] },
-    session: SESSION_OK,
   });
   assert.match(text, /本次结果不可用/);
 });
@@ -41,11 +36,9 @@ test('旧 manifest 的 invalid 没有 cause 时用通用标题，不崩', () => 
 test('断言模块坏（broken）写成用例配置错误，与 invalid 分开', () => {
   const broken = renderVerdict({
     assertion: { status: 'broken', detail: '断言模块没能给出结果数组', results: [] },
-    session: SESSION_OK,
   });
   const invalid = renderVerdict({
     assertion: { status: 'invalid', detail: '取终态快照失败：网络抖动', results: [] },
-    session: SESSION_OK,
   });
   assert.match(broken, /用例配置错误/);
   assert.doesNotMatch(broken, /不可用/);
@@ -54,13 +47,13 @@ test('断言模块坏（broken）写成用例配置错误，与 invalid 分开',
 });
 
 test('旧 manifest（没有 assertion 字段）不写「通过」——它根本没评过', () => {
-  const text = renderVerdict({ assertion: undefined, session: SESSION_OK });
+  const text = renderVerdict({ assertion: undefined });
   assert.doesNotMatch(text, /结局断言 通过/);
   assert.match(text, /未评断言/);
 });
 
 test('status 是 incomplete 时也不写「通过」', () => {
-  const text = renderVerdict({ assertion: { status: 'incomplete', results: [] }, session: SESSION_OK });
+  const text = renderVerdict({ assertion: { status: 'incomplete', results: [] } });
   assert.doesNotMatch(text, /结局断言 通过/);
   assert.match(text, /判定链未开始/);
 });
@@ -74,7 +67,6 @@ test('断言未通过时报告点名失败的那条，并同时写出期望值�
         { ok: false, name: '恰好一个父任务带 5 条子任务', expected: 1, actual: 4 },
       ],
     },
-    session: SESSION_OK,
   });
   assert.match(text, /结局断言 未通过/);
   assert.match(text, /恰好一个父任务带 5 条子任务/);
@@ -85,10 +77,9 @@ test('断言未通过时报告点名失败的那条，并同时写出期望值�
 });
 
 test('缺断言写成「用例配置错误」，与「结局断言 未通过」分开', () => {
-  const missing = renderVerdict({ assertion: { status: 'missing', results: [] }, session: {} });
+  const missing = renderVerdict({ assertion: { status: 'missing', results: [] } });
   const failed = renderVerdict({
     assertion: { status: 'failed', results: [{ ok: false, name: 'x', expected: 1, actual: 2 }] },
-    session: SESSION_OK,
   });
   assert.match(missing, /缺断言/);
   assert.match(missing, /用例配置错误/);
@@ -99,7 +90,6 @@ test('缺断言写成「用例配置错误」，与「结局断言 未通过」�
 test('会话没正常结束 → 报告写「判定链未开始」，不写「不据此判定成败」', () => {
   const text = renderVerdict({
     assertion: { status: 'incomplete', results: [] },
-    session: { exitCode: 1, timedOut: false },
   });
   assert.match(text, /会话没正常结束/);
   assert.match(text, /判定链未开始/);
@@ -208,7 +198,6 @@ test('可信度失败时报告与判定小节都带出 evaluated 的结论', () 
         results: [{ ok: false, name: '父任务应为 TEXT', expected: 'TEXT', actual: 'CHECKLIST' }],
       },
     },
-    session: SESSION_OK,
   });
   assert.match(text, /同一份终态的结局断言/);
   assert.match(text, /父任务应为 TEXT/);
@@ -218,7 +207,6 @@ test('可信度失败时报告与判定小节都带出 evaluated 的结论', () 
 test('没有 evaluated（旧 manifest）时不多出那一节', () => {
   const text = renderVerdict({
     assertion: { status: 'invalid', cause: 'state', detail: 'x', results: [] },
-    session: SESSION_OK,
   });
   assert.doesNotMatch(text, /同一份终态的结局断言/);
 });
@@ -233,7 +221,6 @@ test('会话没正常结束时，manifest 里残留的 evaluated 不渲染', () 
       results: [],
       evaluated: { status: 'failed', results: [{ ok: false, name: 'x', expected: 1, actual: 2 }] },
     },
-    session: { exitCode: 1, timedOut: false },
   });
   assert.match(text, /判定链未开始/);
   assert.doesNotMatch(text, /同一份终态的结局断言/);
@@ -241,16 +228,16 @@ test('会话没正常结束时，manifest 里残留的 evaluated 不渲染', () 
 });
 
 test('旧 manifest 里 status=skipped 也按「判定链未开始」渲染', () => {
-  const text = renderVerdict({ assertion: { status: 'skipped', results: [] }, session: SESSION_OK });
+  const text = renderVerdict({ assertion: { status: 'skipped', results: [] } });
   assert.match(text, /判定链未开始/);
 });
 
-// 旧 manifest 里可信度失败落的是 invalid，退出码同样非零。那次快照取了、断言也跑了，
-// 按前置门写「没有取终态快照，也没有跑任何断言」等于说一件没发生过的事。
-test('会话退出码非零但 status=invalid（旧 manifest）仍按结果不可用渲染，不冒充前置门', () => {
+// 旧 manifest 里可信度失败落的是 invalid，而那次会话的退出码同样非零。那次快照取了、
+// 断言也跑了，按前置门写「没有取终态快照，也没有跑任何断言」等于说一件没发生过的事。
+// 渲染只看 status，不看退出码——这条钉的就是这一点。
+test('status=invalid 一律按结果不可用渲染，不冒充前置门', () => {
   const text = renderVerdict({
     assertion: { status: 'invalid', cause: 'cross-check', detail: '调用日志与轨迹对不上：3 / 4', results: [] },
-    session: { exitCode: 1, timedOut: false },
   });
   assert.match(text, /调用日志与轨迹对不上/);
   assert.doesNotMatch(text, /判定链未开始/);
@@ -266,7 +253,6 @@ test('可信度失败（会话正常结束）时也不出现会话中断的措�
       results: [],
       evaluated: { status: 'failed', results: [{ ok: false, name: 'y', expected: 1, actual: 0 }] },
     },
-    session: SESSION_OK,
   });
   assert.doesNotMatch(text, /会话在此终止/);
 });

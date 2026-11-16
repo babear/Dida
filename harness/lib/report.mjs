@@ -110,7 +110,7 @@ const INCOMPLETE_BLOCK = [
   VERDICT_HEADING, '', INCOMPLETE_HEADLINE, '', `${INCOMPLETE_FACT}：这次会话没有产出可判的事实（见「会话」小节的退出码）。`,
 ].join('\n');
 
-export function renderVerdict({ assertion, session }) {
+export function renderVerdict({ assertion }) {
   const lines = [VERDICT_HEADING, ''];
   if (assertion?.status === 'missing') {
     lines.push('**用例配置错误：缺断言**', '');
@@ -156,7 +156,7 @@ export function renderReport(manifest) {
     return [
       `# ${manifest.scenario} · ${manifest.run}`,
       '',
-      renderVerdict({ assertion: manifest.assertion, session: {} }),
+      renderVerdict({ assertion: manifest.assertion }),
     ].join('\n');
   }
   // 首行就是三个事实，人打开报告第一眼就能回答"测的是哪份 skill、哪个模型、沙箱在哪"。
@@ -168,7 +168,7 @@ export function renderReport(manifest) {
     '',
     created.length === 0 ? '（没有创建任何任务）' : taskTable(created),
     '',
-    renderVerdict({ assertion: manifest.assertion, session: manifest.session }),
+    renderVerdict({ assertion: manifest.assertion }),
     '',
     '## 清场',
     '',
