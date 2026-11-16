@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { credibilityOf, hasCleanupProblem, stateLine, takeState, writeManifest, writeUnusableRun } from './run.mjs';
+import { credibilityOf, hasCleanupProblem, stateLine, takeState, verdictLines, writeManifest, writeUnusableRun } from './run.mjs';
 
 function tmpRepo(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'run-test-'));
@@ -216,4 +216,32 @@ test('credibilityOf：轨迹读不出时 detail 不报未观测到的条数', ()
   assert.equal(out.status, 'indeterminate');
   assert.doesNotMatch(out.detail, /0 条 dida 调用/);
   assert.match(out.detail, /2 条事件/);
+});
+
+// 控制台侧的一次运行一结论（ADR-0014，报告侧同口径见 verdict.test.mjs）。
+// 断言整段输出而不是只查某个词：回潮最可能的样子是有人把后面那面又加回来。
+test('可信度失败时控制台只打第一面，不并排结局断言结论', () => {
+  const lines = verdictLines({
+    status: 'invalid',
+    cause: 'cross-check',
+    detail: '调用日志与轨迹对不上：3 条 dida 调用 / 4 次 PowerShell',
+    results: [{ ok: false, name: '可信度检查', expected: 'x', actual: '3 条 dida 调用 / 4 次 PowerShell' }],
+    // 旧 manifest 里残留的字段：控制台也不该翻出来（--clean 会用当前代码重出报告）
+    evaluated: { status: 'failed', results: [{ ok: false, name: '父任务应为 TEXT', expected: 'TEXT', actual: 'CHECKLIST' }] },
+  });
+  const text = lines.join('\n');
+  assert.match(text, /结果不可信 可信度检查/);
+  assert.match(text, /3 条 dida 调用 \/ 4 次 PowerShell/);
+  assert.doesNotMatch(text, /父任务应为 TEXT/, '后面各面的结论不该出现在控制台');
+  assert.doesNotMatch(text, /断言未通过/, '可信度失败时没有断言这一面');
+  assert.equal(lines.length, 1, '只有第一面那一条失败项');
+});
+
+test('结局断言失败时控制台照旧打「断言未通过」', () => {
+  const text = verdictLines({
+    status: 'failed',
+    results: [{ ok: false, name: '父任务应为 TEXT', expected: 'TEXT', actual: 'CHECKLIST' }],
+  }).join('\n');
+  assert.match(text, /断言未通过 父任务应为 TEXT/);
+  assert.match(text, /期望 TEXT/);
 });

@@ -151,6 +151,22 @@ function reportCleanup(cleanup, run) {
   }
 }
 
+// 判定的控制台行。抽成纯函数才能测：一次运行只给一个结论（ADR-0014），
+// 可信度失败时这里只该有第一面那组失败项，不该再并排一行断言结论。
+// 报告侧同口径，见 report.mjs 的 renderVerdict。
+export function verdictLines(assertion) {
+  const lines = [];
+  // 前置门没过时说清「什么都没判」，否则控制台上会只剩一行 INCOMPLETE 让人去猜。
+  if (assertion.status === 'incomplete') lines.push(`    会话没正常结束，判定链未开始：${INCOMPLETE_FACT}。`);
+  // invalid 的失败项指向 harness 自己（快照取不到 / 调用日志对不上 / 轨迹读不出），
+  // 不是断言不通过——措辞要分开，否则控制台会把基础设施故障或防护缺陷读成 skill 缺陷。
+  for (const result of assertion.results.filter((r) => !r.ok)) {
+    const label = assertion.status === 'invalid' ? invalidLabel(assertion.cause) : '断言未通过';
+    lines.push(`    ${label} ${result.name}：期望 ${formatValue(result.expected)}，实际 ${formatValue(result.actual)}`);
+  }
+  return lines;
+}
+
 async function runOne(options, scenario, projects, assertionFn) {
   const id = scenario.id;
   const runKey = runId();
@@ -451,28 +467,7 @@ async function main() {
     console.log(`  calls=${path.relative(repoRoot, manifest.calls.path)} total=${manifest.calls.total} rejected=${manifest.calls.rejected} outOfBounds=${manifest.calls.outOfBounds}`);
     console.log(`  created=${manifest.created.length} 条${manifest.created.length ? '：' + manifest.created.map((e) => e.id).join('、') : ''}`);
     console.log(stateLine(manifest));
-    // 前置门没过时说清「什么都没判」，否则控制台上会只剩一行 INCOMPLETE 让人去猜。
-    // 与报告正文同源，措辞见 report.mjs 的 INCOMPLETE_FACT。
-    if (manifest.assertion.status === 'incomplete') console.error(`    会话没正常结束，判定链未开始：${INCOMPLETE_FACT}。`);
-    // invalid 的失败项指向 harness 自己（快照取不到 / 调用日志对不上 / 轨迹读不出），
-    // 不是断言不通过——措辞要分开，否则控制台会把基础设施故障或防护缺陷读成 skill 缺陷。
-    for (const result of manifest.assertion.results.filter((r) => !r.ok)) {
-      const label = manifest.assertion.status === 'invalid' ? invalidLabel(manifest.assertion.cause) : '断言未通过';
-      console.error(`    ${label} ${result.name}：期望 ${formatValue(result.expected)}，实际 ${formatValue(result.actual)}`);
-    }
-    // 可信度失败时断言照样跑了，把结论也打出来：否则一次真实的 skill 回归
-    // 在控制台上只剩一句「结果不可信」。
-    const evaluated = manifest.assertion.evaluated;
-    if (evaluated) {
-      if (evaluated.status === 'failed') {
-        console.error('    同一份终态下，结局断言未通过：');
-        for (const result of evaluated.results.filter((r) => !r.ok)) {
-          console.error(`      断言未通过 ${result.name}：期望 ${formatValue(result.expected)}，实际 ${formatValue(result.actual)}`);
-        }
-      } else {
-        console.error(`    同一份终态下，结局断言 ${evaluated.status}（不影响上面的结论）`);
-      }
-    }
+    for (const line of verdictLines(manifest.assertion)) console.error(line);
     reportCleanup(cleanup, run);
     console.log(`  caller marker=${manifest.callerMarker}`);
     console.log(`  run dir=${path.relative(repoRoot, runDir)}`);

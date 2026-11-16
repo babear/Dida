@@ -62,24 +62,6 @@ function detailBlock(title, detail, results) {
   return lines.join('\n');
 }
 
-// 可信度失败时断言照样跑了，结论存在 evaluated 里。它不影响 status，但是读者
-// 判断「要不要重跑」的关键证据——一次真实的 skill 回归不该被一句「疑似绕过」盖掉。
-function evaluatedBlock(evaluated) {
-  if (!evaluated) return [];
-  const lines = ['', '### 同一份终态的结局断言（不影响上面的结论）', ''];
-  if (evaluated.status === 'failed') {
-    lines.push('**断言未通过**', '', renderAssertions(evaluated.results ?? []));
-  } else if (evaluated.status === 'passed') {
-    lines.push('结局断言通过。');
-  } else if (evaluated.status === 'broken') {
-    lines.push(`用例配置错误：${evaluated.detail ?? '断言模块没给出结果数组'}`);
-  } else if (evaluated.status === 'invalid') {
-    // 快照取不到：这时断言模块没跑，evaluated 里只有快照那一类结论。
-    lines.push(`取不到终态快照，评不了：${evaluated.detail ?? '未知原因'}`);
-  }
-  return lines;
-}
-
 // invalid 有三种原因，性质不同：快照取不到是基础设施故障（重跑大概率能好），
 // 可信度失败是防护缺陷或 agent 行为（重跑不一定有用），无从判定则连结论都没有。
 // 标题要能分开——判不出结论时不能说「可能绕过了」，那是在断言一个没观测到的事实。
@@ -128,8 +110,8 @@ export function renderVerdict({ assertion }) {
   if (assertion?.status === 'incomplete' || assertion?.status === 'skipped') return INCOMPLETE_BLOCK;
   if (assertion?.status === 'invalid') {
     // 结果不可用，不当作 skill 缺陷（ADR-0012）。旧 manifest 没有 cause，退回通用标题。
-    const title = invalidTitle(assertion.cause);
-    return [detailBlock(title, assertion.detail ?? '', assertion.results), ...evaluatedBlock(assertion.evaluated)].join('\n');
+    // 判定链在这一面就停了：只写这一面，不并排任何后面的结论（ADR-0014）。
+    return detailBlock(invalidTitle(assertion.cause), assertion.detail ?? '', assertion.results);
   }
   if (assertion?.status === 'failed') {
     lines.push('**结局断言 未通过**', '', renderAssertions(assertion.results ?? []));
