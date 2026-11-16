@@ -32,8 +32,8 @@ function normalizeResult(result, index) {
 // 断言抛错、返回非数组、或返回数组里混了坏元素，都折成失败结果：
 // 一次运行要跑出所有失败项，不能因为断言自己写崩了就丢了整场景的结论。
 // usable 区分「用例自己算出了结论」与「用例根本没算出来」——后者是用例缺陷，
-// 不是 skill 缺陷，上层要分开判。名字不能叫 evaluated：decideAssertion 返回的
-// `evaluated` 是整个结局判定的结论对象，同文件里同名不同义会读错。
+// 不是 skill 缺陷，上层要分开判。名字不能叫 evaluated：后者是命中可信度失败时
+// 旁路存下的结论对象，同文件里同名不同义会读错。
 // 坏元素也算「没算出来」：它指向用例写错了，不是 skill 没做到。用 Array.from
 // 而不是 .map ——稀疏数组的空位在 map 里会被跳过，`new Array(5)` 会让 every
 // 一路放行、直接判通过。
@@ -55,19 +55,19 @@ export async function runAssert(assertionFn, input) {
   };
 }
 
-// 一条 scenario 的结局判定，五个状态照 ADR-0012：skipped（会话没跑完）、
-// invalid（结果不可用，看 cause 决定重跑还是查代码）、broken（用例有缺陷）、
-// failed（skill 没做到）、passed。
+// 一条 scenario 的结局判定，五个状态见 ADR-0012（三面拆分）与本 ADR-0014（前置门与顺序）：
+// incomplete（前置门：会话没正常结束）、invalid（结果不可用，看 cause 决定重跑还是查代码）、
+// broken（用例有缺陷）、failed（skill 没做到）、passed。
 //
-// 「评估」与「判定」是两件事（ADR-0012）：只要事实存在就去算，短路只决定最终 status。
-// `state.json` 的写入与会话是否正常结束无关，所以只要快照取到了，结局断言就该评估：
-// 那次运行的断言结论恰恰是最该看到的证据，丢掉它等于把一次真实的 skill 回归
-// 变成一句「疑似绕过」。一次 `Get-ChildItem` 就足以触发可信度检查，这不是偶发代价。
+// 会话正常结束是判定链的前置门，不属于三面（ADR-0014）：没正常结束时判定链根本没开始，
+// 不取快照、不跑断言，也就没有可信度检查可言——一次「会话没跑完」的运行没有产出可判的事实。
 export async function decideAssertion({
   completed, crossCheck, stateFailed = false, stateError = null, assertionFn, input,
 }) {
+  if (!completed) return { status: 'incomplete', results: [] };
+
   const crossFailure = crossCheckFailure(crossCheck);
-  // 有快照就一律评估——结论存进 evaluated，不影响最终 status。
+  // 快照取到了就一律评估——结论存进 evaluated，不影响最终 status。
   // 没快照就不调用断言模块（`runOutcome` 只在 stateFailed 为真时走那条路）。
   const outcome = await runOutcome({ stateFailed, stateError, assertionFn, input });
   const withOutcome = (verdict) => ({ ...verdict, evaluated: outcome });
@@ -79,9 +79,6 @@ export async function decideAssertion({
       : crossFailure.detail;
     return withOutcome({ ...crossFailure, detail });
   }
-
-  // 会话没跑完：status 是「没正常收尾」而不是「skill 没做到」，结论仍留在 evaluated 里。
-  if (!completed) return withOutcome({ status: 'skipped', results: [] });
 
   return outcome;
 }

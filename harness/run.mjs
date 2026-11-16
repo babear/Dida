@@ -15,7 +15,7 @@ import { crossCheck, crossCheckStatus, outOfBoundsCalls, parseCallLog, rejectedC
 import { readCreated } from './lib/created.mjs';
 import { cleanRun } from './lib/cleanup.mjs';
 import { resolveTestProjects } from './lib/projects.mjs';
-import { formatValue, invalidLabel, renderReport } from './lib/report.mjs';
+import { formatValue, INCOMPLETE_FACT, invalidLabel, renderReport } from './lib/report.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const AGENTS_SOURCE_PATH = path.join(repoRoot, 'harness', 'agents.json');
@@ -102,6 +102,38 @@ export function hasCleanupProblem(cleanup) {
     || cleanup.remaining.length > 0;
 }
 
+// 终态快照受前置门约束（ADR-0014）：会话没正常结束时判定链根本不开始，build 一次都不调、
+// state.json 不落盘。会话正常结束时才取，并落盘供重放——断言逻辑改了之后能用同一份
+// 事实重放，不必重新烧一次 API。取失败时不写文件：写一份空数组会让人以为
+// 「这次一条任务都没有」，重放时读出的是假事实。文件缺失才是诚实的。
+//
+// 三种情形收在一个 status 里，不让调用方拿「空数组 + 布尔」二次推导：
+//   not-started  前置门没过，没取     → 没有 state.json，清单条数无意义（null）
+//   failed       取了但失败           → 没有 state.json，错误在 error
+//   ok           取到了               → state.json 已落盘
+// error 与 status 分开：错误消息可能是空串，靠 message 的真假判失败会把
+// 空消息的 error 当成成功，写下空 state.json 并让断言在 [] 上判 FAILED。
+export function takeState({ completed, statePath, build }) {
+  if (!completed) return { status: 'not-started', state: [], error: null };
+  let state;
+  try {
+    state = build();
+  } catch (error) {
+    return { status: 'failed', state: [], error: error.message || String(error) };
+  }
+  fs.writeFileSync(statePath, JSON.stringify(state, null, 2));
+  return { status: 'ok', state, error: null };
+}
+
+// 控制台上的快照那一行。三种情形各说各的：前置门没过（根本没取）、取了但失败（故障）、
+// 取到了。把前两种混成「未落盘」会让人把「没开始」读成「取失败」，而它们的处理方式相反。
+export function stateLine(manifest) {
+  const state = manifest.state ?? {};
+  if (state.status === 'not-started') return '  state=未取（会话没正常结束，判定链未开始）';
+  if (state.status === 'failed') return `  state=未落盘（${state.error}）`;
+  return `  state=${path.relative(repoRoot, state.path ?? '')}（${state.count} 条）`;
+}
+
 function reportCleanup(cleanup, run) {
   if (cleanup.deferred) {
     console.log(`  cleanup 未清场${run ? `（用 --clean ${run} 收尾）` : ''}`);
@@ -158,25 +190,18 @@ async function runOne(options, scenario, projects, assertionFn) {
   const created = readCreated(createdFile);
   const calls = fs.existsSync(callLogPath) ? parseCallLog(fs.readFileSync(callLogPath, 'utf8')) : [];
 
-  // 终态快照在清场之前取：清场删的正是这些任务，删完再取只能拿到 null。
-  // 快照落盘供重放（用户故事 43）：断言改了之后不必再烧一次 API。
-  // 取快照要枚举清单一，那一步失败不能带走整次运行——下面的 manifest 与清场
-  // 必须照常执行，否则任务建在真实清单里却没人删。
+  // 终态快照受前置门约束（ADR-0014）：会话没正常结束时判定链根本不开始，不取快照、
+  // 不落 state.json——一次没跑完的会话没有产出可判的事实，取到的清单只可能停在半路。
+  // 会话正常结束时，快照仍必须早于清场：清场删的正是这些任务，删完再取只能拿到 null。
+  const completed = sessionCompleted(session);
   const statePath = path.join(runDir, 'state.json');
-  let state = [];
-  let stateFailed = false;
-  let stateError = null;
-  try {
-    state = buildState({ dida: realDida(), created, projects });
-  } catch (error) {
-    // 用布尔表示「失败」，不靠 message 的真假：空格错误消息的 error 会让
-    // 标志变 falsy，于是写下空的 state.json 并让断言在 [] 上判 FAILED。
-    stateFailed = true;
-    stateError = error.message || String(error);
-  }
-  // 取不到快照时不写 state.json：写一份空数组会让人以为「这次一条任务都没有」，
-  // 重放时读出的是假事实。文件缺失才是诚实的。
-  if (!stateFailed) fs.writeFileSync(statePath, JSON.stringify(state, null, 2));
+  const snapshot = takeState({
+    completed,
+    statePath,
+    // 取快照要枚举清单一，那一步失败不能带走整次运行——下面的 manifest 与清场
+    // 必须照常执行，否则任务建在真实清单里却没人删。
+    build: () => buildState({ dida: realDida(), created, projects }),
+  });
 
   const sessionInfo = {
     exitCode: session.exitCode,
@@ -184,16 +209,16 @@ async function runOne(options, scenario, projects, assertionFn) {
     turns: summary.turns,
     costUsd: summary.costUsd,
   };
-  const completed = sessionCompleted(session);
+
   // 五个状态的分界见 decideAssertion 的注释。判定本身不抛错，下面的 manifest 与清场总执行。
   const credibility = credibilityOf({ calls, toolCalls: summary.toolCalls, events });
   const assertion = await decideAssertion({
     completed,
     crossCheck: credibility,
-    stateFailed,
-    stateError,
+    stateFailed: snapshot.status === 'failed',
+    stateError: snapshot.error,
     assertionFn,
-    input: { tasks: state, created, calls, session: sessionInfo },
+    input: { tasks: snapshot.state, created, calls, session: sessionInfo },
   });
 
   const manifest = {
@@ -226,8 +251,14 @@ async function runOne(options, scenario, projects, assertionFn) {
       crossCheck: credibility,
     },
     created,
-    // count 为 null 表示没取到快照，与「取到了、0 条」区分开。
-    state: { path: statePath, count: stateFailed ? null : state.length, error: stateError },
+    // status 三态照 takeState；count 为 null 表示「没有可数的事实」——没取（前置门没过）
+    // 或取失败都落 null，与「取到了、0 条」区分开。
+    state: {
+      path: statePath,
+      status: snapshot.status,
+      count: snapshot.status === 'ok' ? snapshot.state.length : null,
+      error: snapshot.error,
+    },
     assertion,
     testProjects: projects,
     callerMarker: sandbox.callerMarker,
@@ -407,7 +438,7 @@ async function main() {
 
     const verdict = {
       passed: 'PASSED',
-      skipped: 'INCOMPLETE',
+      incomplete: 'INCOMPLETE',
       failed: 'FAILED',
       broken: 'BROKEN',
       invalid: 'INVALID',
@@ -419,9 +450,10 @@ async function main() {
     console.log(`  transcript=${path.relative(repoRoot, manifest.transcript.path)} events=${manifest.transcript.events} toolCalls=${manifest.transcript.toolCalls}`);
     console.log(`  calls=${path.relative(repoRoot, manifest.calls.path)} total=${manifest.calls.total} rejected=${manifest.calls.rejected} outOfBounds=${manifest.calls.outOfBounds}`);
     console.log(`  created=${manifest.created.length} 条${manifest.created.length ? '：' + manifest.created.map((e) => e.id).join('、') : ''}`);
-    console.log(manifest.state.error
-      ? `  state=未落盘（${manifest.state.error}）`
-      : `  state=${path.relative(repoRoot, manifest.state.path)}（${manifest.state.count} 条）`);
+    console.log(stateLine(manifest));
+    // 前置门没过时说清「什么都没判」，否则控制台上会只剩一行 INCOMPLETE 让人去猜。
+    // 与报告正文同源，措辞见 report.mjs 的 INCOMPLETE_FACT。
+    if (manifest.assertion.status === 'incomplete') console.error(`    会话没正常结束，判定链未开始：${INCOMPLETE_FACT}。`);
     // invalid 的失败项指向 harness 自己（快照取不到 / 调用日志对不上 / 轨迹读不出），
     // 不是断言不通过——措辞要分开，否则控制台会把基础设施故障或防护缺陷读成 skill 缺陷。
     for (const result of manifest.assertion.results.filter((r) => !r.ok)) {

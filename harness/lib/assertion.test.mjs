@@ -93,9 +93,44 @@ test('元素缺布尔 ok 时也算形状不对', async () => {
   assert.match(results[0].name, /形状不对/);
 });
 
-test('会话没正常结束 → skipped，断言不评', async () => {
-  const out = await decideAssertion({ completed: false, stateFailed: false, assertionFn: () => { throw new Error('不该被调用'); }, input: INPUT });
-  assert.equal(out.status, 'skipped');
+// 前置门：会话没正常结束时判定链根本不开始（ADR-0014）。快照取没取到都不该
+// 走到断言模块——断言模块被调用这件事本身就是「判定链开始了」的证据。
+test('会话没正常结束 → incomplete，断言不评', async () => {
+  let called = 0;
+  const out = await decideAssertion({
+    completed: false,
+    stateFailed: false,
+    assertionFn: () => { called += 1; return [{ ok: true }]; },
+    input: INPUT,
+  });
+  assert.equal(out.status, 'incomplete');
+  assert.equal(called, 0);
+});
+
+test('会话没正常结束时，前置门先于可信度检查：可信度不过也报 incomplete', async () => {
+  let called = 0;
+  const out = await decideAssertion({
+    completed: false,
+    crossCheck: { status: 'inconsistent', detail: '3 条 dida 调用 / 10 次 PowerShell' },
+    stateFailed: false,
+    assertionFn: () => { called += 1; return [{ ok: true }]; },
+    input: INPUT,
+  });
+  assert.equal(out.status, 'incomplete', '没有可判的事实，可信度检查无从谈起');
+  assert.deepEqual(out.results, [], '判定链未开始，一条结论都不该有');
+  assert.equal(called, 0);
+});
+
+test('会话没正常结束且快照取不到时也是 incomplete，不报 invalid(state)', async () => {
+  const out = await decideAssertion({
+    completed: false,
+    stateFailed: true,
+    stateError: '网络抖动',
+    assertionFn: () => { throw new Error('不该被调用'); },
+    input: INPUT,
+  });
+  assert.equal(out.status, 'incomplete');
+  assert.equal(out.cause, undefined, '前置门不过，不进入快照那一面');
 });
 
 test('断言全过 → passed', async () => {
@@ -232,32 +267,17 @@ test('不传 crossCheck（旧调用方）时行为与之前一致', async () => 
   assert.equal(out.status, 'passed');
 });
 
-test('会话没正常结束但可信度不过时，报可信度失败而不是 skipped——日志不可信是更靠前的事实', async () => {
+test('会话正常结束且可信度通过时，才轮到结局断言', async () => {
   let called = 0;
   const out = await decideAssertion({
-    completed: false,
-    crossCheck: { status: 'inconsistent', detail: '3 条 dida 调用 / 10 次 PowerShell' },
-    stateFailed: false,
-    assertionFn: () => { called += 1; return [{ ok: true }]; },
-    input: INPUT,
-  });
-  assert.equal(out.status, 'invalid');
-  assert.equal(out.cause, 'cross-check');
-  assert.equal(called, 1, '快照在，断言就要评估');
-  assert.equal(out.evaluated.status, 'passed');
-});
-
-test('会话没正常结束且可信度通过时，仍是 skipped', async () => {
-  let called = 0;
-  const out = await decideAssertion({
-    completed: false,
+    completed: true,
     crossCheck: { status: 'consistent', detail: '1 条 dida 调用 / 1 次 PowerShell' },
     stateFailed: false,
     assertionFn: () => { called += 1; return [{ ok: true }]; },
     input: INPUT,
   });
-  assert.equal(out.status, 'skipped');
-  assert.equal(called, 1, 'status 是 skipped，但断言照样评估');
+  assert.equal(out.status, 'passed');
+  assert.equal(called, 1);
 });
 
 // 评论 #33 第 1 条：可信度失败时断言仍要评估，否则一次真实的 skill 回归
@@ -303,21 +323,13 @@ test('可信度失败且断言模块抛错时，evaluated 是 broken，不外溢
   assert.equal(out.evaluated.status, 'broken');
 });
 
-// state.json 与 completed 无关：会话没跑完，快照照样落盘，所以结论照样算得出来。
-test('会话没跑完但快照取到了，结局断言仍被评估，status 仍是 skipped', async () => {
-  let called = 0;
-  const out = await decideAssertion({
-    completed: false,
-    crossCheck: { status: 'consistent', detail: '0 / 0' },
-    assertionFn: () => { called += 1; return [{ ok: false, name: 'x' }]; },
-    input: INPUT,
-  });
-  assert.equal(out.status, 'skipped');
-  assert.equal(called, 1);
-  assert.equal(out.evaluated.status, 'failed');
-});
+// state.json 与 completed 无关的那套语义已作废（ADR-0014）：会话没正常结束时
+// 既不取快照也不跑断言，状态只有一个词。
 
-test('会话没跑完且快照也没取到时，不评估——没有事实可评', async () => {
+// state.json 与 completed 无关的那套旧语义已作废（ADR-0014）：会话没正常结束时
+// 既不取快照也不跑断言，状态只有一个词。会话正常结束时的各面判定见上面的用例。
+
+test('会话没跑完且快照也没取到时，同样只是 incomplete', async () => {
   let called = 0;
   const out = await decideAssertion({
     completed: false,
@@ -327,7 +339,7 @@ test('会话没跑完且快照也没取到时，不评估——没有事实可�
     assertionFn: () => { called += 1; return [{ ok: true }]; },
     input: INPUT,
   });
-  assert.equal(out.status, 'skipped');
+  assert.equal(out.status, 'incomplete');
   assert.equal(called, 0);
 });
 

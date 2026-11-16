@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { invalidLabel, invalidTitle, renderAssertions, renderVerdict } from './report.mjs';
+import { INCOMPLETE_FACT, invalidLabel, invalidTitle, renderAssertions, renderVerdict } from './report.mjs';
 
 const SESSION_OK = { exitCode: 0, timedOut: false, turns: 5, costUsd: 0.1 };
 
@@ -59,10 +59,10 @@ test('旧 manifest（没有 assertion 字段）不写「通过」——它根本
   assert.match(text, /未评断言/);
 });
 
-test('status 是 skipped 时也不写「通过」', () => {
-  const text = renderVerdict({ assertion: { status: 'skipped', results: [] }, session: SESSION_OK });
+test('status 是 incomplete 时也不写「通过」', () => {
+  const text = renderVerdict({ assertion: { status: 'incomplete', results: [] }, session: SESSION_OK });
   assert.doesNotMatch(text, /结局断言 通过/);
-  assert.match(text, /未评断言/);
+  assert.match(text, /判定链未开始/);
 });
 
 test('断言未通过时报告点名失败的那条，并同时写出期望值与实际值', () => {
@@ -96,12 +96,34 @@ test('缺断言写成「用例配置错误」，与「结局断言 未通过」�
   assert.doesNotMatch(failed, /缺断言/);
 });
 
-test('会话没正常结束时不据此判定成败，报告写明会话先失败', () => {
+test('会话没正常结束 → 报告写「判定链未开始」，不写「不据此判定成败」', () => {
   const text = renderVerdict({
-    assertion: { status: 'skipped', results: [] },
+    assertion: { status: 'incomplete', results: [] },
     session: { exitCode: 1, timedOut: false },
   });
-  assert.match(text, /会话未正常结束/);
+  assert.match(text, /会话没正常结束/);
+  assert.match(text, /判定链未开始/);
+  assert.match(text, new RegExp(INCOMPLETE_FACT), '报告与控制台共用同一句，别各写一份');
+  assert.doesNotMatch(text, /不据此判定成败/);
+  assert.doesNotMatch(text, /跳过/);
+});
+
+// 任务表与判定链正交（ADR-0014）：会话没正常结束时也要能看到本次建了什么，
+// 否则「现场已保留」这句没有下手的地方。
+test('会话没正常结束时，整份报告里仍有本次创建的任务表', async () => {
+  const { renderReport } = await import('./report.mjs');
+  const report = renderReport({
+    scenario: 's', run: 'r', sandbox: '/tmp/x', skill: { sha256: 'a', files: 1, git: {} },
+    model: { requested_alias: 'x', alias_mapping: {} },
+    session: { exitCode: 1, timedOut: false, turns: 3, costUsd: 0 },
+    created: [{ id: 'aaaa00000000000000000001', projectId: 'p1', title: '半路建的任务' }],
+    cleanup: { deferred: true },
+    assertion: { status: 'incomplete', results: [] },
+  });
+  assert.match(report, /## 本次创建的任务/);
+  assert.match(report, /aaaa00000000000000000001/);
+  assert.match(report, /半路建的任务/);
+  assert.match(report, /判定链未开始/);
 });
 
 test('期望值与实际值是对象时按 JSON 写，不写成 [object Object]', () => {
@@ -201,52 +223,41 @@ test('没有 evaluated（旧 manifest）时不多出那一节', () => {
   assert.doesNotMatch(text, /同一份终态的结局断言/);
 });
 
-test('会话没正常结束但快照取到了：报告仍带出 evaluated 的结论', () => {
+// 会话没正常结束时，报告里不该出现任何断言结论——判定链没开始，也没有结论可带。
+// 旧 manifest 里残留的 evaluated 字段（旧版本落下的）一并忽略，否则读者会看到
+// 一份「判定链未开始」下面紧跟一组「断言未通过」，又回到 ADR-0014 要消除的形状。
+test('会话没正常结束时，manifest 里残留的 evaluated 不渲染', () => {
   const text = renderVerdict({
     assertion: {
-      status: 'skipped',
+      status: 'incomplete',
       results: [],
       evaluated: { status: 'failed', results: [{ ok: false, name: 'x', expected: 1, actual: 2 }] },
     },
     session: { exitCode: 1, timedOut: false },
   });
-  assert.match(text, /会话未正常结束/);
-  assert.match(text, /同一份终态的结局断言/);
-  assert.match(text, /期望 1/);
-});
-
-test('会话没正常结束且没有 evaluated 时不多出那一节', () => {
-  const text = renderVerdict({
-    assertion: { status: 'skipped', results: [] },
-    session: { exitCode: 1, timedOut: false },
-  });
-  assert.match(text, /会话未正常结束/);
+  assert.match(text, /判定链未开始/);
   assert.doesNotMatch(text, /同一份终态的结局断言/);
+  assert.doesNotMatch(text, /期望 1/);
 });
 
-test('会话中断导致断言失败时，报告提示「清单可能停在半路」', () => {
+test('旧 manifest 里 status=skipped 也按「判定链未开始」渲染', () => {
+  const text = renderVerdict({ assertion: { status: 'skipped', results: [] }, session: SESSION_OK });
+  assert.match(text, /判定链未开始/);
+});
+
+// 旧 manifest 里可信度失败落的是 invalid，退出码同样非零。那次快照取了、断言也跑了，
+// 按前置门写「没有取终态快照，也没有跑任何断言」等于说一件没发生过的事。
+test('会话退出码非零但 status=invalid（旧 manifest）仍按结果不可用渲染，不冒充前置门', () => {
   const text = renderVerdict({
-    assertion: {
-      status: 'skipped',
-      results: [],
-      evaluated: { status: 'failed', results: [{ ok: false, name: 'x', expected: 1, actual: 0 }] },
-    },
+    assertion: { status: 'invalid', cause: 'cross-check', detail: '调用日志与轨迹对不上：3 / 4', results: [] },
     session: { exitCode: 1, timedOut: false },
   });
-  assert.match(text, /会话在此终止/);
-  assert.match(text, /未必是 skill 没做到/);
+  assert.match(text, /调用日志与轨迹对不上/);
+  assert.doesNotMatch(text, /判定链未开始/);
+  assert.doesNotMatch(text, /没有取终态快照/);
 });
 
-test('会话中断但断言通过时不加那条提示——通过不需要解释', () => {
-  const text = renderVerdict({
-    assertion: { status: 'skipped', results: [], evaluated: { status: 'passed', results: [] } },
-    session: { exitCode: 1, timedOut: false },
-  });
-  assert.doesNotMatch(text, /会话在此终止/);
-  assert.match(text, /结局断言通过/);
-});
-
-test('可信度失败（会话正常结束）时也不加那条提示', () => {
+test('可信度失败（会话正常结束）时也不出现会话中断的措辞', () => {
   const text = renderVerdict({
     assertion: {
       status: 'invalid',
