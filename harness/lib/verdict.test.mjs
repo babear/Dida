@@ -116,6 +116,32 @@ test('会话没正常结束时，整份报告里仍有本次创建的任务表',
   assert.match(report, /判定链未开始/);
 });
 
+// 前置门没过时可信度检查根本没跑过（ADR-0014）。manifest 里的 crossCheck 是
+// credibilityOf 无条件算出来的，报告照搬它就会在「判定链未开始」旁边再摆一组
+// 「与轨迹对不上」——正是 ADR-0014 要消除的形状。
+// 正反两条一起测：只测「不在」的话，把守卫改成恒 false 也照样绿。
+const CROSS_MANIFEST = {
+  scenario: 's', run: 'r', sandbox: '/tmp/x', skill: { sha256: 'a', files: 1, git: {} },
+  model: { requested_alias: 'x', alias_mapping: {} },
+  session: { exitCode: 0, timedOut: false, turns: 3, costUsd: 0 },
+  created: [],
+  cleanup: { deleted: [] },
+  calls: { path: 'c', total: 1, rejected: 0, outOfBounds: 0, crossCheck: { calls: 1, shapeCalls: 9, status: 'inconsistent' } },
+};
+
+test('会话没正常结束时，报告不渲染可信度结论——判定链没开始，没有这组结论', async () => {
+  const { renderReport } = await import('./report.mjs');
+  const report = renderReport({ ...CROSS_MANIFEST, assertion: { status: 'incomplete', results: [] } });
+  assert.doesNotMatch(report, /与轨迹对不上/);
+  assert.doesNotMatch(report, /与轨迹对得上/);
+});
+
+test('会话正常结束时，同样的 crossCheck 要渲染出来——守卫不能把这一面整个关掉', async () => {
+  const { renderReport } = await import('./report.mjs');
+  const report = renderReport({ ...CROSS_MANIFEST, assertion: { status: 'invalid', cause: 'cross-check', detail: 'x', results: [] } });
+  assert.match(report, /与轨迹对不上/);
+});
+
 test('期望值与实际值是对象时按 JSON 写，不写成 [object Object]', () => {
   const text = renderAssertions([
     { ok: false, name: '父任务', expected: { kind: 'TEXT' }, actual: { kind: 'CHECKLIST' } },

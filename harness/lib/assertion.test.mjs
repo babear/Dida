@@ -323,9 +323,6 @@ test('可信度失败且断言模块抛错时，evaluated 是 broken，不外溢
   assert.equal(out.evaluated.status, 'broken');
 });
 
-// state.json 与 completed 无关的那套语义已作废（ADR-0014）：会话没正常结束时
-// 既不取快照也不跑断言，状态只有一个词。
-
 // state.json 与 completed 无关的那套旧语义已作废（ADR-0014）：会话没正常结束时
 // 既不取快照也不跑断言，状态只有一个词。会话正常结束时的各面判定见上面的用例。
 
