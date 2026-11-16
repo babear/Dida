@@ -15,7 +15,7 @@ import { crossCheck, crossCheckStatus, outOfBoundsCalls, parseCallLog, rejectedC
 import { readCreated } from './lib/created.mjs';
 import { cleanRun } from './lib/cleanup.mjs';
 import { resolveTestProjects } from './lib/projects.mjs';
-import { formatValue, INCOMPLETE_FACT, invalidLabel, renderReport } from './lib/report.mjs';
+import { formatValue, INCOMPLETE_FACT, invalidLabel, renderReport, retentionNote } from './lib/report.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const AGENTS_SOURCE_PATH = path.join(repoRoot, 'harness', 'agents.json');
@@ -71,6 +71,34 @@ function realDida() {
 
 function emptyCleanup(overrides = {}) {
   return { deleted: [], failed: [], remaining: [], mismatched: [], ...overrides };
+}
+
+// 清场门控（ADR-0014）：只有 PASSED 才清场，其余一律保留现场。
+// 门控看判定结论，不看会话退出码——一次 invalid 的运行会话可能正常结束，
+// 按退出码判会把它清掉，而它的账本恰恰可能盖不全（绕过 shim 建的任务清不掉）。
+// hold 是操作者的显式要求（--hold：跑完不清场），与判定结论无关。
+// 沙箱保留是另一件事：--keep-sandbox 只留沙箱、照常清场（见 README 的参数表）。
+export function cleanupGate({ status, hold = false }) {
+  return status !== 'passed' || hold;
+}
+
+// 保留现场时控制台的那一行。措辞与报告同源（retentionNote），
+// AC 要求两处都能读到同一句「现场已保留，用 --clean <runId> 收尾」。
+export function deferredCleanupLine(run) {
+  return run ? `  cleanup 未清场（${retentionNote(run)}）` : '  cleanup 未清场（现场已保留）';
+}
+
+// 批跑汇总：失败即留现场，跑十条挂六条就是六批任务。没有这份清单，
+// 人下次打开客户端无从追溯该收哪几条。
+// 入列条件是「现场确实留了」，不是「没通过」：--hold 下通过的运行也留了现场，
+// 同样需要人收尾。所以由调用方按 defer 决定入列，这里只负责渲染。
+export function retainedSummaryLines(entries) {
+  if (entries.length === 0) return [];
+  return [
+    `本次有 ${entries.length} 条现场已保留：`,
+    ...entries.map((entry) => `  ${entry.run}  ${entry.scenario}  ${entry.status}`),
+    '  确认后用 --clean <runId> 逐条收尾。',
+  ];
 }
 
 // 一条 run 的可信度结论：三面表的第一面，喂给 decideAssertion。
@@ -136,7 +164,7 @@ export function stateLine(manifest) {
 
 function reportCleanup(cleanup, run) {
   if (cleanup.deferred) {
-    console.log(`  cleanup 未清场${run ? `（用 --clean ${run} 收尾）` : ''}`);
+    console.log(deferredCleanupLine(run));
     return;
   }
   if (cleanup.error) {
@@ -347,7 +375,7 @@ async function main() {
   --scenario <id>     只跑这一条 scenario（默认全部）
   --skill-path <dir>  复制进沙箱的 skill 目录（默认 skills/dida-cli）
   --settings <file>   取 ANTHROPIC_* 键的来源（默认 ~/.claude/settings.json）
-  --keep-sandbox      成功时也保留沙箱
+  --keep-sandbox      成功时也保留沙箱（不影响清场）
   --hold              跑完不清场，留现场
   --clean <runId>     只按该 run 的 created.ndjson 删除任务，然后退出`);
     return;
@@ -385,7 +413,10 @@ async function main() {
     return;
   }
 
+  // 清单只收真正开过会话、有现场的 run：NOT FOUND 与 MISCONFIGURED 在开会话之前
+  // 就退出了，没有任务也没有沙箱，列进来只会让人去找一个不存在的现场。
   let failures = 0;
+  const retainedRuns = [];
   for (const id of ids) {
     // 缺 assert.mjs 不开会话：两个目录（scenarios/ 与 probes/）的区分就是有没有断言，
     // 跳过会让漏写的用例静默退出回归网、退出码仍是 0。这是用例配置错误，不是断言未通过。
@@ -426,15 +457,18 @@ async function main() {
     const { run, runDir, sandbox, manifest, session, createdFile } = await runOne(options, scenario, projects, assertionFn);
     const completed = sessionCompleted(session);
 
-    const retained = !completed || options.keepSandbox || options.hold;
+    // 只有 PASSED 才清场（ADR-0014）。旧门控是「会话没正常结束才不清场」，
+    // 断言失败照清——而失败的时刻恰恰最需要对着任务清单查原因。
+    const defer = cleanupGate({ status: manifest.assertion.status, hold: options.hold });
+    // 沙箱保留与清场是两件事：--keep-sandbox 只留沙箱，照常清场（README 参数表）。
+    const retained = defer || options.keepSandbox;
 
     // 先把会话事实落盘，再动清单：清场读账本出错时，manifest 与 report 必须已经在了。
     writeManifest(runDir, { ...manifest, cleanup: null, sandboxRetained: retained });
 
-    // 只按账本删。会话没正常结束时连任务一起保留现场，由 --clean 显式收尾。
     let cleanup;
     try {
-      cleanup = options.hold || !completed
+      cleanup = defer
         ? emptyCleanup({ deferred: true })
         : cleanRun({ dida: realDida(), projects, createdFile });
     } catch (error) {
@@ -444,6 +478,7 @@ async function main() {
     writeManifest(runDir, finalManifest);
     writeReport(runDir, finalManifest);
     if (!retained) fs.rmSync(sandbox.root, { recursive: true, force: true });
+    if (defer) retainedRuns.push({ run, scenario: id, status: manifest.assertion.status });
 
     // 清场失败只记 log 不中断：每条 scenario 的账本按 runId 隔离，删不掉自己的那几条
     // 不会影响下一条的判断。退出码仍非零，让人知道有现场要收。
@@ -474,6 +509,9 @@ async function main() {
     if (!completed) console.log(`  session exit=${session.exitCode} timedOut=${session.timedOut}`);
   }
 
+  // 批跑汇总（ADR-0014）：失败即留现场，跑十条挂六条就是六批任务。
+  // 没有这份清单，人下次打开客户端无从追溯该收哪几条。
+  for (const line of retainedSummaryLines(retainedRuns)) console.log(line);
   if (failures > 0) process.exitCode = 1;
 }
 
