@@ -280,10 +280,12 @@ test('会话正常结束且可信度通过时，才轮到结局断言', async ()
   assert.equal(called, 1);
 });
 
-// 评论 #33 第 1 条：可信度失败时断言仍要评估，否则一次真实的 skill 回归
-// 会被一句「疑似绕过」盖掉；工具面没有 Bash，一次 Get-ChildItem 就足以触发。
+// 可信度失败即终止判定链（ADR-0014）：断言模块连调用都不该有。用调用计数验证，
+// 光看 status 挡不住回归——#33 曾经让断言照跑、只把结论旁路存进 evaluated。
+// 一次 Get-ChildItem 就足以触发可信度失败，断言若照跑，报告里就会并排出现
+// 「结果不可信」和一组真假难辨的断言结论，正是 ADR-0014 要消除的形状。
 
-test('可信度失败时断言仍被调用，结论留在 evaluated 里', async () => {
+test('可信度不一致时断言模块不被调用，只留可信度这一面结论', async () => {
   let called = 0;
   const out = await decideAssertion({
     completed: true,
@@ -294,33 +296,39 @@ test('可信度失败时断言仍被调用，结论留在 evaluated 里', async 
     },
     input: INPUT,
   });
-  assert.equal(called, 1, '断言模块必须被调用');
-  assert.equal(out.status, 'invalid', '最终 status 仍由可信度决定');
-  assert.equal(out.evaluated.status, 'failed');
-  assert.equal(out.evaluated.results[0].name, '父任务应为 TEXT');
-});
-
-test('可信度失败且断言通过时，evaluated 记录 passed，status 仍是 invalid', async () => {
-  const out = await decideAssertion({
-    completed: true,
-    crossCheck: { status: 'inconsistent', detail: '1 / 2' },
-    assertionFn: () => [{ ok: true, name: 'x' }],
-    input: INPUT,
-  });
+  assert.equal(called, 0, '判定链在第一面就停了，断言模块不该被调用');
   assert.equal(out.status, 'invalid');
-  assert.equal(out.evaluated.status, 'passed');
+  assert.equal(out.cause, 'cross-check');
+  assert.equal(out.results[0].name, '可信度检查');
+  assert.equal(Object.hasOwn(out, 'evaluated'), false, 'evaluated 已拆除，不应再出现在返回值里');
 });
 
-test('可信度失败且断言模块抛错时，evaluated 是 broken，不外溢成 status', async () => {
+test('可信度无法判定时断言模块同样不被调用', async () => {
+  let called = 0;
   const out = await decideAssertion({
     completed: true,
-    crossCheck: { status: 'indeterminate', detail: '0 / 0' },
-    assertionFn: () => { throw new Error('崩了'); },
+    crossCheck: { status: 'indeterminate', detail: '0 条 dida 调用 / 0 次 PowerShell' },
+    assertionFn: () => { called += 1; return [{ ok: true }]; },
     input: INPUT,
   });
+  assert.equal(called, 0);
   assert.equal(out.status, 'invalid');
   assert.equal(out.cause, 'indeterminate');
-  assert.equal(out.evaluated.status, 'broken');
+  assert.equal(Object.hasOwn(out, 'evaluated'), false);
+});
+
+test('可信度条数与原因写进 results，不因短路而丢', async () => {
+  const out = await decideAssertion({
+    completed: true,
+    crossCheck: { status: 'inconsistent', detail: '3 条 dida 调用 / 4 次 PowerShell' },
+    assertionFn: () => { throw new Error('不该被调用'); },
+    input: INPUT,
+  });
+  // 第一面的结论要完整：条数（detail 与 actual）、原因、以及 cause 决定的标题口径
+  assert.match(out.detail, /3 条 dida 调用 \/ 4 次 PowerShell/);
+  assert.match(out.results[0].actual, /3 条 dida 调用 \/ 4 次 PowerShell/);
+  assert.equal(out.results[0].ok, false);
+  assert.equal(out.results.length, 1);
 });
 
 // state.json 与 completed 无关的那套旧语义已作废（ADR-0014）：会话没正常结束时
@@ -352,7 +360,7 @@ test('可信度结果行的 expected 不声称「调用都能归因」——条�
   assert.match(row.actual, /不等于有调用没被记录/);
 });
 
-test('可信度与快照同时失败时，快照错误也进 detail，不只活在控制台', async () => {
+test('可信度与快照同时失败时，快照错误也并进 detail', async () => {
   const out = await decideAssertion({
     completed: true,
     crossCheck: { status: 'inconsistent', detail: '3 / 4' },
@@ -364,5 +372,5 @@ test('可信度与快照同时失败时，快照错误也进 detail，不只活�
   assert.equal(out.status, 'invalid');
   assert.equal(out.cause, 'cross-check');
   assert.match(out.detail, /网络抖动/);
-  assert.equal(out.evaluated.cause, 'state', '快照失败本身也是一条结论，只是它没跑断言模块');
+  assert.equal(Object.hasOwn(out, 'evaluated'), false, 'evaluated 已拆除，快照错误只并进 detail');
 });

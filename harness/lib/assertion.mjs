@@ -32,8 +32,7 @@ function normalizeResult(result, index) {
 // 断言抛错、返回非数组、或返回数组里混了坏元素，都折成失败结果：
 // 一次运行要跑出所有失败项，不能因为断言自己写崩了就丢了整场景的结论。
 // usable 区分「用例自己算出了结论」与「用例根本没算出来」——后者是用例缺陷，
-// 不是 skill 缺陷，上层要分开判。名字不能叫 evaluated：后者是命中可信度失败时
-// 旁路存下的结论对象，同文件里同名不同义会读错。
+// 不是 skill 缺陷，上层要分开判。
 // 坏元素也算「没算出来」：它指向用例写错了，不是 skill 没做到。用 Array.from
 // 而不是 .map ——稀疏数组的空位在 map 里会被跳过，`new Array(5)` 会让 every
 // 一路放行、直接判通过。
@@ -61,26 +60,24 @@ export async function runAssert(assertionFn, input) {
 //
 // 会话正常结束是判定链的前置门，不属于三面（ADR-0014）：没正常结束时判定链根本没开始，
 // 不取快照、不跑断言，也就没有可信度检查可言——一次「会话没跑完」的运行没有产出可判的事实。
+//
+// 可信度检查同理：它不过，说明这次运行的事实基础不成立，后面各面算出来的东西没有参考价值
+// （判据至今只比条数，#18）。所以只返回第一面的结论，不调断言模块——一次运行只给一个结论。
 export async function decideAssertion({
   completed, crossCheck, stateFailed = false, stateError = null, assertionFn, input,
 }) {
   if (!completed) return { status: 'incomplete', results: [] };
 
   const crossFailure = crossCheckFailure(crossCheck);
-  // 快照取到了就一律评估——结论存进 evaluated，不影响最终 status。
-  // 没快照就不调用断言模块（`runOutcome` 只在 stateFailed 为真时走那条路）。
-  const outcome = await runOutcome({ stateFailed, stateError, assertionFn, input });
-  const withOutcome = (verdict) => ({ ...verdict, evaluated: outcome });
-
   if (crossFailure) {
-    // 两个都失败时，快照错误本身也是证据，别让它只活在控制台那一行。
+    // 快照若也失败，把错误并进 detail：控制台只打 results，不写进 detail 就只在报告里。
     const detail = stateFailed
       ? `${crossFailure.detail}\n另外，终态快照也取不到：${stateError}`
       : crossFailure.detail;
-    return withOutcome({ ...crossFailure, detail });
+    return { ...crossFailure, detail };
   }
 
-  return outcome;
+  return runOutcome({ stateFailed, stateError, assertionFn, input });
 }
 
 // 可信度失败时的结论；通过时返回 null。

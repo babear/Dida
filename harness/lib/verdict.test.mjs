@@ -212,12 +212,16 @@ test('invalidLabel 三种 cause 各自不同，未知退回通用', () => {
   assert.equal(invalidLabel('nonsense'), '结果不可用');
 });
 
-test('可信度失败时报告与判定小节都带出 evaluated 的结论', () => {
+// 可信度失败即终止判定链（ADR-0014）：报告里只有第一面这一节结论。
+// 一次运行只给一个结论——读者无从判断「结果不可信」旁边那组断言该不该信，
+// 而判据至今只比条数（#18），那组结论本身可能就是错的。
+// 旧 manifest 里残留的 evaluated 字段一并忽略：--clean 会用当前代码重渲染旧报告。
+test('可信度失败时报告只有一面结论，旧 manifest 残留的 evaluated 也不渲染', () => {
   const text = renderVerdict({
     assertion: {
       status: 'invalid',
       cause: 'cross-check',
-      detail: '调用日志与轨迹对不上：3 / 4',
+      detail: '调用日志与轨迹对不上：3 条 dida 调用 / 4 次 PowerShell',
       results: [{ ok: false, name: '可信度检查', expected: 'x', actual: 'y' }],
       evaluated: {
         status: 'failed',
@@ -225,16 +229,11 @@ test('可信度失败时报告与判定小节都带出 evaluated 的结论', () 
       },
     },
   });
-  assert.match(text, /同一份终态的结局断言/);
-  assert.match(text, /父任务应为 TEXT/);
-  assert.match(text, /CHECKLIST/);
-});
-
-test('没有 evaluated（旧 manifest）时不多出那一节', () => {
-  const text = renderVerdict({
-    assertion: { status: 'invalid', cause: 'state', detail: 'x', results: [] },
-  });
-  assert.doesNotMatch(text, /同一份终态的结局断言/);
+  assert.match(text, /调用日志与轨迹对不上/);
+  assert.match(text, /可信度检查/);
+  assert.doesNotMatch(text, /同一份终态/, 'evaluated 整节已删除');
+  assert.doesNotMatch(text, /父任务应为 TEXT/, '后面各面的结论不该再出现');
+  assert.doesNotMatch(text, /结局断言/, '可信度失败时没有结局断言这一面');
 });
 
 // 会话没正常结束时，报告里不该出现任何断言结论——判定链没开始，也没有结论可带。
