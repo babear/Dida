@@ -14,7 +14,9 @@ The five canonical triage roles map to same-named labels: `needs-triage`, `needs
 
 Single-context: one `GLOSSARY.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md` for how to read and use them. Before writing to either, read its rules: `~/.claude/skills/domain-modeling/GLOSSARY-FORMAT.md` and `ADR-FORMAT.md`.
 
-**Changing `GLOSSARY.md` or anything under `docs/adr/` requires running `/grill-with-docs` first.** The glossary and ADRs are the project's agreed vocabulary and decisions, not a scratch pad for whatever the current change implies — a wording edit there redefines terms other docs and code rely on. Grill the change before writing it.
+**Writing to `GLOSSARY.md` or anything under `docs/adr/` goes through `/domain-modeling`.** The glossary and ADRs are the project's agreed vocabulary and decisions, not a scratch pad for whatever the current change implies — a wording edit there redefines terms other docs and code rely on.
+
+Escalate to `/grill-with-docs` when the change involves a trade-off, records a new decision, or reshapes the model (splitting a term, renaming a concept, adding or revising an ADR). A stale definition or a typo does not need the interview.
 
 ## Workflow
 

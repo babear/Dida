@@ -4,13 +4,66 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { credibilityOf, hasCleanupProblem, writeManifest, writeUnusableRun } from './run.mjs';
+import { credibilityOf, hasCleanupProblem, stateLine, takeState, writeManifest, writeUnusableRun } from './run.mjs';
 
 function tmpRepo(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'run-test-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   return dir;
 }
+
+// 前置门（ADR-0014）：会话没正常结束时判定链根本不开始。三条用例锁的就是
+// 「不取快照」——快照的构建被调用这件事本身就是判定链开始了的证据。
+
+test('会话没正常结束时不构建终态快照，state.json 不生成', (t) => {
+  const dir = tmpRepo(t);
+  const statePath = path.join(dir, 'state.json');
+  let built = 0;
+
+  const out = takeState({ completed: false, statePath, build: () => { built += 1; return [{ id: 'a' }]; } });
+
+  assert.equal(built, 0, '没跑完的会话没有产出可判的事实，不该去枚举清单');
+  assert.equal(fs.existsSync(statePath), false, 'state.json 不存在才是诚实的');
+  assert.equal(out.status, 'not-started', '「没开始」与「取失败」不是一回事');
+  assert.deepEqual(out.state, []);
+});
+
+test('会话正常结束时才取快照并落盘', (t) => {
+  const dir = tmpRepo(t);
+  const statePath = path.join(dir, 'state.json');
+
+  const out = takeState({ completed: true, statePath, build: () => [{ id: 'a' }] });
+
+  assert.equal(out.status, 'ok');
+  assert.deepEqual(out.state, [{ id: 'a' }]);
+  assert.deepEqual(JSON.parse(fs.readFileSync(statePath, 'utf8')), [{ id: 'a' }]);
+});
+
+test('取快照失败时不写 state.json，也不抛——manifest 与清场还得照常跑', (t) => {
+  const dir = tmpRepo(t);
+  const statePath = path.join(dir, 'state.json');
+
+  const out = takeState({
+    completed: true,
+    statePath,
+    build: () => { throw new Error('网络抖动'); },
+  });
+
+  assert.equal(out.status, 'failed');
+  assert.equal(out.error, '网络抖动');
+  assert.equal(fs.existsSync(statePath), false);
+});
+
+test('控制台的 state 行把「没取」与「取失败」分开写', () => {
+  const notStarted = stateLine({ state: { path: 'x', status: 'not-started', count: null, error: null } });
+  const failed = stateLine({ state: { path: 'x', status: 'failed', count: null, error: '网络抖动' } });
+
+  assert.match(notStarted, /未取/);
+  assert.match(notStarted, /判定链未开始/);
+  assert.match(failed, /未落盘/);
+  assert.match(failed, /网络抖动/);
+  assert.doesNotMatch(failed, /判定链未开始/);
+});
 
 function cleanupFixture(overrides = {}) {
   return { deleted: [], failed: [], remaining: [], mismatched: [], ...overrides };

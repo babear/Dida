@@ -1,5 +1,3 @@
-import { sessionCompleted } from './session.mjs';
-
 // 首行只放前 12 位：够区分一次改动，又不至于长得没法读。
 function short(value) {
   return value ? value.slice(0, 12) : 'unknown';
@@ -66,14 +64,11 @@ function detailBlock(title, detail, results) {
 
 // 可信度失败时断言照样跑了，结论存在 evaluated 里。它不影响 status，但是读者
 // 判断「要不要重跑」的关键证据——一次真实的 skill 回归不该被一句「疑似绕过」盖掉。
-// interrupted：会话没正常结束，快照取的是终止那一刻的清单，任务可能建了一半。
-function evaluatedBlock(evaluated, { interrupted = false } = {}) {
+function evaluatedBlock(evaluated) {
   if (!evaluated) return [];
   const lines = ['', '### 同一份终态的结局断言（不影响上面的结论）', ''];
   if (evaluated.status === 'failed') {
     lines.push('**断言未通过**', '', renderAssertions(evaluated.results ?? []));
-    // 只有失败才提示：通过时不需要解释为什么它可能不准。
-    if (interrupted) lines.push('', '会话在此终止，清单可能停在半路——失败未必是 skill 没做到。');
   } else if (evaluated.status === 'passed') {
     lines.push('结局断言通过。');
   } else if (evaluated.status === 'broken') {
@@ -105,7 +100,17 @@ export function invalidLabel(cause) {
   return (INVALID_CAUSES[cause] ?? FALLBACK_CAUSE).label;
 }
 
-export function renderVerdict({ assertion, session }) {
+// 前置门（ADR-0014）：会话没正常结束时判定链没开始，不取快照、不跑断言。
+// 措辞要与控制台的 INCOMPLETE 一致，不出现「跳过」——跳过会让人问「跳过什么、谁跳过谁」。
+// 报告与控制台都从这里取，ADR-0014 要的是三处同一个词，那就只能有一处写它。
+const INCOMPLETE_HEADLINE = '**会话没正常结束，判定链未开始**';
+export const INCOMPLETE_FACT = '没有取终态快照，也没有跑任何断言';
+
+const INCOMPLETE_BLOCK = [
+  VERDICT_HEADING, '', INCOMPLETE_HEADLINE, '', `${INCOMPLETE_FACT}：这次会话没有产出可判的事实（见「会话」小节的退出码）。`,
+].join('\n');
+
+export function renderVerdict({ assertion }) {
   const lines = [VERDICT_HEADING, ''];
   if (assertion?.status === 'missing') {
     lines.push('**用例配置错误：缺断言**', '');
@@ -116,16 +121,15 @@ export function renderVerdict({ assertion, session }) {
     // 用例自己的问题：断言模块坏了、没给出结果数组。修用例，不用改 skill。
     return detailBlock('用例配置错误：断言没给出结果', assertion.detail ?? '断言模块没能给出结果数组。', assertion.results);
   }
+  // 前置门先于三面：会话没正常结束时判定链没开始，后面几面都没有结论可写。
+  // 只按 status 判，不按 session 退出码：旧 manifest 里「会话没跑完」落的是 skipped，
+  // 按同一件事渲染；而旧 manifest 里可信度失败落的是 invalid，退出码同样非零——
+  // 那次的快照取了、断言也跑了，按前置门写会说出一件没发生过的事。
+  if (assertion?.status === 'incomplete' || assertion?.status === 'skipped') return INCOMPLETE_BLOCK;
   if (assertion?.status === 'invalid') {
     // 结果不可用，不当作 skill 缺陷（ADR-0012）。旧 manifest 没有 cause，退回通用标题。
     const title = invalidTitle(assertion.cause);
     return [detailBlock(title, assertion.detail ?? '', assertion.results), ...evaluatedBlock(assertion.evaluated)].join('\n');
-  }
-  if (!sessionCompleted(session ?? {})) {
-    // 不能写「不评断言」——快照取到时确实评了，结论就在下面。
-    const head = `${VERDICT_HEADING}\n\n会话未正常结束，不据此判定成败（见「会话」小节的退出码）。`;
-    // 快照取到了就仍有一份结局结论：它不影响 status，但能看出 skill 本身有没有做到。
-    return [head, ...evaluatedBlock(assertion?.evaluated, { interrupted: true })].join('\n');
   }
   if (assertion?.status === 'failed') {
     lines.push('**结局断言 未通过**', '', renderAssertions(assertion.results ?? []));
@@ -152,7 +156,7 @@ export function renderReport(manifest) {
     return [
       `# ${manifest.scenario} · ${manifest.run}`,
       '',
-      renderVerdict({ assertion: manifest.assertion, session: {} }),
+      renderVerdict({ assertion: manifest.assertion }),
     ].join('\n');
   }
   // 首行就是三个事实，人打开报告第一眼就能回答"测的是哪份 skill、哪个模型、沙箱在哪"。
@@ -164,7 +168,7 @@ export function renderReport(manifest) {
     '',
     created.length === 0 ? '（没有创建任何任务）' : taskTable(created),
     '',
-    renderVerdict({ assertion: manifest.assertion, session: manifest.session }),
+    renderVerdict({ assertion: manifest.assertion }),
     '',
     '## 清场',
     '',
@@ -173,7 +177,7 @@ export function renderReport(manifest) {
   if (cleanup.error) {
     lines.push(`**清场未执行**：${cleanup.error}`);
   } else if (cleanup.deferred) {
-    lines.push(`未清场：会话未正常结束，现场保留。确认后用 \`--clean ${manifest.run}\` 收尾。`);
+    lines.push(`未清场：会话没正常结束，现场已保留。确认后用 \`--clean ${manifest.run}\` 收尾。`);
   } else {
     lines.push(`按账本删除 ${cleanup.deleted?.length ?? 0} 条，失败 ${cleanup.failed?.length ?? 0} 条。`);
     if (cleanup.remaining?.length) {
@@ -202,7 +206,10 @@ export function renderReport(manifest) {
     lines.push(`- 被拒绝的写命令 ${manifest.calls.rejected} 次（${parts.join('、')}；写请求没有发出去）`);
   }
   const cross = manifest.calls?.crossCheck;
-  if (cross) {
+  // 会话没正常结束时判定链没开始，可信度检查没跑过（ADR-0014）：这时候把
+  // 「与轨迹对不上」写进报告，等于在 INCOMPLETE 旁边多摆一组结论，又回到那个形状。
+  const judged = manifest.assertion?.status !== 'incomplete' && manifest.assertion?.status !== 'skipped';
+  if (cross && judged) {
     // 三态：判不出结论时不能说「对得上」，那是把「不知道」当成「没问题」。
     // 旧 manifest 只有 consistent 布尔（那时还没有「判不出」这个概念），按它回退。
     const status = cross.status ?? (cross.consistent ? 'consistent' : 'inconsistent');
@@ -240,7 +247,7 @@ export function renderSummary(manifest) {
       : `在测试清单里建了 ${created.length} 条任务（${created.map((e) => e.id).join('、')}）。`,
   ];
   if (cleanup.deferred) {
-    parts.push('会话未正常结束，任务与沙箱一并保留，需显式清场。');
+    parts.push('会话没正常结束，任务与沙箱一并保留，需显式清场。');
   } else if (cleanup.error) {
     parts.push(`清场未执行：${cleanup.error}`);
   } else {
