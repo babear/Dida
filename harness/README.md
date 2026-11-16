@@ -16,7 +16,7 @@ npm run test:harness  # harness 自己的单元测试，不烧 API
 | `--scenario <id>` | 全部 | 只跑 `skill-tests/scenarios/<id>/` 这一条 |
 | `--skill-path <dir>` | `skills/dida-cli` | 要复制进沙箱的 skill 目录 |
 | `--settings <file>` | `~/.claude/settings.json` | 取 `ANTHROPIC_*` 键的来源 |
-| `--keep-sandbox` | 关 | 成功时也保留沙箱（失败时总是保留） |
+| `--keep-sandbox` | 关 | 成功时也保留沙箱（失败时总是保留）。只管沙箱，不影响清场 |
 | `--hold` | 关 | 跑完不清场，留现场给人看；之后用 `--clean <runId>` 收尾 |
 | `--clean <runId>` | — | 只按该 run 的 `created.ndjson` 删除任务，然后退出 |
 
@@ -176,7 +176,7 @@ run-<runId>/
 
 `runs/` 已在 `.gitignore` 里。
 
-成功时删除沙箱，失败、`--keep-sandbox` 或 `--hold` 时保留，`manifest.sandboxRetained` 记录实际结果。
+沙箱在 `PASSED` 且未要求保留时删除；失败、`--keep-sandbox` 或 `--hold` 时保留，`manifest.sandboxRetained` 记录实际结果。保留现场（不清场）与保留沙箱是两件事：前者看判定结论与 `--hold`，后者看 `--keep-sandbox`。
 
 ## 已知边界
 

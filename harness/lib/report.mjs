@@ -92,6 +92,31 @@ const INCOMPLETE_BLOCK = [
   VERDICT_HEADING, '', INCOMPLETE_HEADLINE, '', `${INCOMPLETE_FACT}：这次会话没有产出可判的事实（见「会话」小节的退出码）。`,
 ].join('\n');
 
+// 清场门控（ADR-0014）：只有 PASSED 才清场，其余一律保留现场。报告与控制台
+// 共用这一句——两处各写一份，改一处就会漏另一处。
+export function retentionNote(run) {
+  return `现场已保留，用 \`--clean ${run}\` 收尾`;
+}
+
+// 为什么不给这条运行清场。理由取自判定结论，不取自会话退出码：
+// 一次 invalid 的会话可能正常结束，按退出码写会说成「会话没跑完」。
+// passed 也在这里：--hold 让通过的运行保留现场，那不是「没通过」。
+// skipped 是旧 manifest 里 incomplete 的旧名，按同一件事写（与 renderVerdict 同口径）。
+const RETENTION_REASONS = {
+  passed: '操作者要求保留现场（--hold）',
+  incomplete: '会话没正常结束，agent 可能只干到一半',
+  skipped: '会话没正常结束，agent 可能只干到一半',
+  invalid: '结果不可用，账本可能盖不住绕过 shim 建的任务，留现场比清一半好查',
+  failed: '断言未通过，要能对着任务清单看它为什么失败',
+  broken: '用例有缺陷，任务已建，现场要留着核对',
+};
+
+const FALLBACK_RETENTION_REASON = '没有自动清场';
+
+export function retentionReason(status) {
+  return RETENTION_REASONS[status] ?? FALLBACK_RETENTION_REASON;
+}
+
 export function renderVerdict({ assertion }) {
   const lines = [VERDICT_HEADING, ''];
   if (assertion?.status === 'missing') {
@@ -159,7 +184,7 @@ export function renderReport(manifest) {
   if (cleanup.error) {
     lines.push(`**清场未执行**：${cleanup.error}`);
   } else if (cleanup.deferred) {
-    lines.push(`未清场：会话没正常结束，现场已保留。确认后用 \`--clean ${manifest.run}\` 收尾。`);
+    lines.push(`未清场：${retentionReason(manifest.assertion?.status)}。${retentionNote(manifest.run)}。`);
   } else {
     lines.push(`按账本删除 ${cleanup.deleted?.length ?? 0} 条，失败 ${cleanup.failed?.length ?? 0} 条。`);
     if (cleanup.remaining?.length) {
@@ -229,7 +254,7 @@ export function renderSummary(manifest) {
       : `在测试清单里建了 ${created.length} 条任务（${created.map((e) => e.id).join('、')}）。`,
   ];
   if (cleanup.deferred) {
-    parts.push('会话没正常结束，任务与沙箱一并保留，需显式清场。');
+    parts.push(`${retentionReason(manifest.assertion?.status)}，任务与沙箱一并保留（${retentionNote(manifest.run)}）。`);
   } else if (cleanup.error) {
     parts.push(`清场未执行：${cleanup.error}`);
   } else {

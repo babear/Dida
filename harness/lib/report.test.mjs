@@ -201,3 +201,80 @@ test('没开会话的运行（缺断言）只写判定，不写清场与模型',
   assert.doesNotMatch(report, /## 清场/);
   assert.doesNotMatch(report, /## 模型/);
 });
+
+// 清场门控（ADR-0014）：只有 PASSED 才清场，失败一律保留现场。
+// 失败运行的报告是本 run 唯一的对照物——任务表告诉人该去清单里看哪几条。
+const RETENTION = /现场已保留，用 `--clean 2026-11-07T09-00-00-000Z-ab12cd` 收尾/;
+
+function retainedReport(assertion, cleanup = { deferred: true }) {
+  return renderReport({ ...MANIFEST, assertion, cleanup });
+}
+
+test('四种失败结论的报告都写「现场已保留，用 --clean <runId> 收尾」', () => {
+  for (const assertion of [
+    { status: 'incomplete', results: [] },
+    { status: 'invalid', cause: 'cross-check', detail: 'x', results: [] },
+    { status: 'failed', results: [{ ok: false, name: 'x', expected: 1, actual: 2 }] },
+    { status: 'broken', detail: 'x', results: [] },
+  ]) {
+    const report = retainedReport(assertion);
+    assert.match(report, RETENTION, `${assertion.status} 的报告要说清现场怎么收尾`);
+    assert.doesNotMatch(report, /按账本删除/, `${assertion.status} 不该写成已清场`);
+  }
+});
+
+test('保留现场的报告仍列本次创建的任务，失败时才有的对照物', () => {
+  const report = retainedReport({ status: 'failed', results: [{ ok: false, name: 'x', expected: 1, actual: 2 }] });
+  assert.match(report, /## 本次创建的任务/);
+  assert.match(report, /aaaa00000000000000000001/);
+});
+
+test('通过的报告写实际删除条数，不写现场已保留', () => {
+  const report = retainedReport({ status: 'passed', results: [] }, { deleted: ['aaaa00000000000000000001'], failed: [], remaining: [], mismatched: [] });
+  assert.match(report, /按账本删除 1 条/);
+  assert.doesNotMatch(report, /现场已保留/);
+});
+
+test('摘要跟着判定走：失败写保留现场，通过写删掉几条', () => {
+  const failed = renderSummary({
+    ...MANIFEST,
+    assertion: { status: 'failed', results: [{ ok: false, name: 'x', expected: 1, actual: 2 }] },
+    cleanup: { deferred: true },
+  });
+  assert.match(failed, /现场已保留/);
+  const passed = renderSummary({ ...MANIFEST, assertion: { status: 'passed', results: [] } });
+  assert.match(passed, /清场删掉 1 条/);
+  assert.doesNotMatch(passed, /现场已保留/);
+});
+
+test('清场真出错时报告写原因，不被「保留现场」掩盖', () => {
+  const report = renderReport({
+    ...MANIFEST,
+    assertion: { status: 'passed', results: [] },
+    cleanup: { deleted: [], failed: [], remaining: [], mismatched: [], error: '账本不是合法 JSON' },
+  });
+  assert.match(report, /清场未执行/);
+  assert.match(report, /账本不是合法 JSON/);
+  assert.doesNotMatch(report, /现场已保留/);
+});
+
+// --hold 让通过的运行也保留现场。那种运行的报告里不能出现「判定未通过」——
+// 同一份报告上半截写「结局断言 通过」、下半截写「没通过」，就是 ADR-0014 要消除的
+// 多结论并存，而且这一次是直接说反了。
+test('通过的运行被 --hold 留下时，报告说清是 --hold，不冒充「判定未通过」', () => {
+  const report = retainedReport({ status: 'passed', results: [] });
+  assert.match(report, /现场已保留/);
+  assert.match(report, /--hold/);
+  assert.doesNotMatch(report, /判定未通过/);
+  assert.doesNotMatch(report, /未通过/);
+});
+
+test('旧 manifest 的 skipped（incomplete 的旧名）保留现场理由与 incomplete 一致', () => {
+  const text = renderSummary({
+    ...MANIFEST,
+    assertion: { status: 'skipped', results: [] },
+    cleanup: { deferred: true },
+  });
+  assert.match(text, /会话没正常结束/);
+  assert.doesNotMatch(text, /没有自动清场/);
+});

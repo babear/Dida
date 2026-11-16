@@ -4,7 +4,18 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { credibilityOf, hasCleanupProblem, stateLine, takeState, verdictLines, writeManifest, writeUnusableRun } from './run.mjs';
+import {
+  cleanupGate,
+  credibilityOf,
+  deferredCleanupLine,
+  hasCleanupProblem,
+  retainedSummaryLines,
+  stateLine,
+  takeState,
+  verdictLines,
+  writeManifest,
+  writeUnusableRun,
+} from './run.mjs';
 
 function tmpRepo(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'run-test-'));
@@ -244,4 +255,62 @@ test('结局断言失败时控制台照旧打「断言未通过」', () => {
   }).join('\n');
   assert.match(text, /断言未通过 父任务应为 TEXT/);
   assert.match(text, /期望 TEXT/);
+});
+
+// 清场门控（ADR-0014）：只有 PASSED 才清场。这张表是判定结果与清场动作的唯一映射，
+// 逐状态钉住——旧门控是「会话没正常结束才不清场」，断言失败照清，
+// 而断言失败的时刻恰恰最需要对着任务清单看它为什么失败。
+test('只有 passed 才清场', () => {
+  assert.equal(cleanupGate({ status: 'passed', hold: false }), false);
+});
+
+test('incomplete / invalid / failed / broken 一律保留现场', () => {
+  for (const status of ['incomplete', 'invalid', 'failed', 'broken']) {
+    assert.equal(cleanupGate({ status, hold: false }), true, `${status} 不该清场`);
+  }
+});
+
+test('--hold 让通过的运行也保留现场', () => {
+  assert.equal(cleanupGate({ status: 'passed', hold: true }), true);
+});
+
+test('--keep-sandbox 不阻止清场：它只管沙箱，清场看的是 --hold 与判定结论', () => {
+  // README 的参数表把 --keep-sandbox 定义为「成功时也保留沙箱」。
+  // 把它并进门控会让 PASSED + --keep-sandbox 连任务一起留下，
+  // 与验收标准「只有 PASSED 执行清场」相反。
+  assert.equal(cleanupGate({ status: 'passed', hold: false }), false);
+});
+
+test('保留现场时控制台写「现场已保留，用 --clean <runId> 收尾」', () => {
+  const line = deferredCleanupLine('2026-11-16T09-00-00-000Z-ab12cd');
+  assert.match(line, /现场已保留/);
+  assert.match(line, /--clean 2026-11-16T09-00-00-000Z-ab12cd/);
+  assert.doesNotMatch(deferredCleanupLine(undefined), /undefined/, '没有 run id 时不写一个假的');
+});
+
+test('批跑汇总列出本次所有保留现场的 run——失败即留现场，没有清单无从追溯', () => {
+  const lines = retainedSummaryLines([
+    { run: 'r1', scenario: 's1', status: 'incomplete' },
+    { run: 'r2', scenario: 's2', status: 'failed' },
+    { run: 'r4', scenario: 's4', status: 'invalid' },
+  ]);
+  const text = lines.join('\n');
+  assert.match(text, /3 条现场已保留/);
+  assert.match(text, /r1/);
+  assert.match(text, /s1/);
+  assert.match(text, /r2/);
+  assert.match(text, /s2/);
+  assert.match(text, /r4/);
+  assert.match(text, /s4/);
+  assert.match(text, /--clean <runId>/);
+});
+
+test('通过的运行被 --hold 留下时也进汇总理清单——现场确实存在', () => {
+  const text = retainedSummaryLines([{ run: 'r9', scenario: 's9', status: 'passed' }]).join('\n');
+  assert.match(text, /1 条现场已保留/);
+  assert.match(text, /r9/);
+});
+
+test('没有保留现场时也不写清单', () => {
+  assert.deepEqual(retainedSummaryLines([]), []);
 });
