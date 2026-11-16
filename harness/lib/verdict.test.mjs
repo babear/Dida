@@ -26,6 +26,34 @@ test('快照取不到（invalid, cause=state）写成「结果不可用」，不
   assert.doesNotMatch(text, /用例配置错误/);
 });
 
+// 验收标准：两种失败措辞与指引互不混淆——一个让人重跑，一个让人改 skill。
+// 只查各自的词不够：要查「另一个的指引没有串过来」。
+test('快照取不到与断言不通过：措辞、指引、标题三者互不串台', () => {
+  const stateFail = renderVerdict({
+    assertion: {
+      status: 'invalid',
+      cause: 'state',
+      detail: '取终态快照失败：网络抖动。这是基础设施故障，重跑一次。',
+      results: [{ ok: false, name: '终态快照不可用', expected: '能列出测试清单', actual: '网络抖动' }],
+    },
+  });
+  const assertFail = renderVerdict({
+    assertion: {
+      status: 'failed',
+      results: [{ ok: false, name: '父任务应为 TEXT', expected: 'TEXT', actual: 'CHECKLIST' }],
+    },
+  });
+
+  assert.doesNotMatch(stateFail, /结局断言 未通过/, '快照取不到时断言没跑过');
+  assert.doesNotMatch(stateFail, /父任务应为 TEXT/);
+  assert.doesNotMatch(assertFail, /终态快照/);
+  assert.doesNotMatch(assertFail, /基础设施故障/);
+  assert.doesNotMatch(assertFail, /结果不可用/);
+  // 两边的指引各说各的：快照指向重跑，断言指向改 skill。
+  assert.match(stateFail, /重跑一次/);
+  assert.match(assertFail, /改 skill/);
+});
+
 test('旧 manifest 的 invalid 没有 cause 时用通用标题，不崩', () => {
   const text = renderVerdict({
     assertion: { status: 'invalid', detail: '取终态快照失败：x', results: [] },

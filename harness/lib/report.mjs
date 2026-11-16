@@ -139,7 +139,10 @@ export function renderVerdict({ assertion }) {
     return detailBlock(invalidTitle(assertion.cause), assertion.detail ?? '', assertion.results);
   }
   if (assertion?.status === 'failed') {
-    lines.push('**结局断言 未通过**', '', renderAssertions(assertion.results ?? []));
+    // 与 invalid 的 cause=state 分开：那条指向重跑，这条指向改 skill。
+    // 两者都写着「这次没通过」，指引却相反，措辞混用会把人带错方向。
+    lines.push('**结局断言 未通过：skill 没做到**', '', renderAssertions(assertion.results ?? []));
+    lines.push('', '去改 skill。同样的 skill 再跑一次不会变绿。');
     return lines.join('\n');
   }
   // 只有明确的 passed 才写通过：旧 manifest（--clean 会重渲染）没有 assertion 字段，

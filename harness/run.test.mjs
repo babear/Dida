@@ -23,27 +23,15 @@ function tmpRepo(t) {
   return dir;
 }
 
-// 前置门（ADR-0014）：会话没正常结束时判定链根本不开始。三条用例锁的就是
-// 「不取快照」——快照的构建被调用这件事本身就是判定链开始了的证据。
+// 快照只做一件事：build 一次、成功就落盘。**要不要 build** 由判定链决定
+// （assertion.mjs 的 decideAssertion），这里不再自己判前置门与可信度——
+// 两处各判一次就会出现「这一面说没取、那一面说取了」的分叉。
 
-test('会话没正常结束时不构建终态快照，state.json 不生成', (t) => {
-  const dir = tmpRepo(t);
-  const statePath = path.join(dir, 'state.json');
-  let built = 0;
-
-  const out = takeState({ completed: false, statePath, build: () => { built += 1; return [{ id: 'a' }]; } });
-
-  assert.equal(built, 0, '没跑完的会话没有产出可判的事实，不该去枚举清单');
-  assert.equal(fs.existsSync(statePath), false, 'state.json 不存在才是诚实的');
-  assert.equal(out.status, 'not-started', '「没开始」与「取失败」不是一回事');
-  assert.deepEqual(out.state, []);
-});
-
-test('会话正常结束时才取快照并落盘', (t) => {
+test('会话正常结束时取快照并落盘', (t) => {
   const dir = tmpRepo(t);
   const statePath = path.join(dir, 'state.json');
 
-  const out = takeState({ completed: true, statePath, build: () => [{ id: 'a' }] });
+  const out = takeState({ statePath, build: () => [{ id: 'a' }] });
 
   assert.equal(out.status, 'ok');
   assert.deepEqual(out.state, [{ id: 'a' }]);
@@ -55,7 +43,6 @@ test('取快照失败时不写 state.json，也不抛——manifest 与清场还
   const statePath = path.join(dir, 'state.json');
 
   const out = takeState({
-    completed: true,
     statePath,
     build: () => { throw new Error('网络抖动'); },
   });
@@ -65,15 +52,33 @@ test('取快照失败时不写 state.json，也不抛——manifest 与清场还
   assert.equal(fs.existsSync(statePath), false);
 });
 
-test('控制台的 state 行把「没取」与「取失败」分开写', () => {
-  const notStarted = stateLine({ state: { path: 'x', status: 'not-started', count: null, error: null } });
-  const failed = stateLine({ state: { path: 'x', status: 'failed', count: null, error: '网络抖动' } });
+// 写盘也可能失败（磁盘满、权限）。它若抛出，判定链就断了：manifest 落不下、清场不跑，
+// 任务留在真实清单里没人删。所以与取数失败同一个出口。
+test('落盘失败同样折成 failed，不抛', (t) => {
+  const dir = tmpRepo(t);
+  // 拿目录当文件名：writeFileSync 必然抛 EISDIR
+  const statePath = path.join(dir, 'state.json');
+  fs.mkdirSync(statePath);
 
-  assert.match(notStarted, /未取/);
-  assert.match(notStarted, /判定链未开始/);
+  const out = takeState({ statePath, build: () => [{ id: 'a' }] });
+
+  assert.equal(out.status, 'failed');
+  assert.ok(out.error, '错误消息要留下，不能靠空串判失败');
+});
+
+test('控制台的 state 行三种情形各说各的：「没取」不冒充「取失败」', () => {
+  // 没取有两种来路，控制台上共用一句——两者的处置都是看判定那一行，而那里已经写明原因。
+  const notTaken = stateLine({ state: { path: 'x', status: 'not-taken', count: null, error: null } });
+  const failed = stateLine({ state: { path: 'x', status: 'failed', count: null, error: '网络抖动' } });
+  const ok = stateLine({ state: { path: 'x', status: 'ok', count: 2, error: null } });
+
+  assert.match(notTaken, /未取/);
+  assert.match(notTaken, /判定链/);
   assert.match(failed, /未落盘/);
   assert.match(failed, /网络抖动/);
-  assert.doesNotMatch(failed, /判定链未开始/);
+  assert.doesNotMatch(failed, /判定链/);
+  assert.match(ok, /2 条/);
+  assert.doesNotMatch(ok, /未/);
 });
 
 function cleanupFixture(overrides = {}) {

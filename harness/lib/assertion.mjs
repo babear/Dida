@@ -62,22 +62,42 @@ export async function runAssert(assertionFn, input) {
 // 不取快照、不跑断言，也就没有可信度检查可言——一次「会话没跑完」的运行没有产出可判的事实。
 //
 // 可信度检查同理：它不过，说明这次运行的事实基础不成立，后面各面算出来的东西没有参考价值
-// （判据至今只比条数，#18）。所以只返回第一面的结论，不调断言模块——一次运行只给一个结论。
+// （判据至今只比条数，#18）。所以只返回第一面的结论，不取快照、不调断言模块——
+// 一次运行只给一个结论。
+//
+// 快照在结局断言这一刻取，不在会话结束时取（ADR-0014）：它的唯一消费者是结局断言，
+// 前面两面都过了才轮得到它。取不到是基础设施故障，判 invalid（cause: state）并停住，
+// 不拿 [] 去跑断言——那组结论只会把人引向错误的方向。
+//
+// 返回值里的 snapshot 是**这次判定实际用的快照**，调用方据此落 manifest 与报告，
+// 不必也不该自己再取一次：「没取」与「取了」的事实只有判定链知道。
 export async function decideAssertion({
-  completed, crossCheck, stateFailed = false, stateError = null, assertionFn, input,
+  completed, crossCheck, takeSnapshot, assertionFn, input,
 }) {
-  if (!completed) return { status: 'incomplete', results: [] };
+  if (!completed) return { status: 'incomplete', results: [], snapshot: notTaken() };
 
   const crossFailure = crossCheckFailure(crossCheck);
-  if (crossFailure) {
-    // 快照若也失败，把错误并进 detail：控制台只打 results，不写进 detail 就只在报告里。
-    const detail = stateFailed
-      ? `${crossFailure.detail}\n另外，终态快照也取不到：${stateError}`
-      : crossFailure.detail;
-    return { ...crossFailure, detail };
+  if (crossFailure) return { ...crossFailure, snapshot: notTaken() };
+
+  const snapshot = takeSnapshot();
+  // 只认 'ok'：takeState 现在只产 ok / failed，但这里按「不是 ok 就停」写，
+  // 多一个状态（比如将来某种取不到）也不会带着空清单滑进断言。
+  if (snapshot.status !== 'ok') {
+    return {
+      status: 'invalid',
+      cause: 'state',
+      detail: `取终态快照失败：${snapshot.error}。这是基础设施故障，重跑一次。`,
+      results: [{ ok: false, name: '终态快照不可用', expected: '能列出测试清单', actual: snapshot.error }],
+      snapshot,
+    };
   }
 
-  return runOutcome({ stateFailed, stateError, assertionFn, input });
+  return { ...(await runOutcome(assertionFn, { ...input, tasks: snapshot.state })), snapshot };
+}
+
+// 「没取」：没有 state.json，清单条数无意义（null）。
+function notTaken() {
+  return { status: 'not-taken', state: [], error: null };
 }
 
 // 可信度失败时的结论；通过时返回 null。
@@ -110,16 +130,7 @@ function crossCheckFailure(crossCheck) {
 }
 
 // 快照 → 断言。任何一步失败都折成结论，不抛。
-async function runOutcome({ stateFailed, stateError, assertionFn, input }) {
-  if (stateFailed) {
-    return {
-      status: 'invalid',
-      cause: 'state',
-      detail: `取终态快照失败：${stateError}。这是基础设施故障，重跑一次。`,
-      results: [{ ok: false, name: '终态快照不可用', expected: '能列出测试清单', actual: stateError }],
-    };
-  }
-
+async function runOutcome(assertionFn, input) {
   try {
     const { usable, results } = await runAssert(assertionFn, input);
     if (!usable) {
