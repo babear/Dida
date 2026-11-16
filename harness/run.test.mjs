@@ -9,6 +9,8 @@ import {
   credibilityOf,
   deferredCleanupLine,
   hasCleanupProblem,
+  probeAssertNotice,
+  probesLeftoverLines,
   retainedSummaryLines,
   stateLine,
   takeState,
@@ -287,6 +289,15 @@ test('--keep-sandbox 不阻止清场：它只管沙箱，清场看的是 --hold 
   assert.equal(cleanupGate({ status: 'passed', hold: false }), false);
 });
 
+// 探针永不清场（ADR-0015）：它的全部价值就是现场——任务、沙箱、state.json
+// 都要留着供人打开客户端对着写断言。这条不能靠「探针结论不是 passed」这种
+// 巧合成立：将来探针若多一个新结论词，清场就会悄悄漏进来。
+test('探针无论结论如何都不清场', () => {
+  for (const status of ['sampled', 'incomplete', 'invalid']) {
+    assert.equal(cleanupGate({ status, hold: false, kind: 'probe' }), true, `探针 ${status} 不该清场`);
+  }
+});
+
 test('保留现场时控制台写「现场已保留，用 --clean <runId> 收尾」', () => {
   const line = deferredCleanupLine('2026-11-16T09-00-00-000Z-ab12cd');
   assert.match(line, /现场已保留/);
@@ -342,4 +353,41 @@ test('前置不改动传入的对象', () => {
   const source = { Path: 'C:\\Windows' };
   withPrependedPath(source, 'C:\\bin');
   assert.deepEqual(source, { Path: 'C:\\Windows' });
+});
+
+// 全量运行不碰 probes/（ADR-0015）：探针不计入回归网。但 probes/ 里有残留
+// 说明流程没走完——「断言写好了却没搬走」会让回归网静默少一条。
+test('probes/ 为空时不写提醒', () => {
+  assert.deepEqual(probesLeftoverLines([]), []);
+});
+
+test('probes/ 非空时汇总末尾提醒清理', () => {
+  const text = probesLeftoverLines(['checklist-desc-field', 'another-probe']).join('\n');
+  assert.match(text, /2 条探针/);
+  assert.match(text, /checklist-desc-field/);
+  assert.match(text, /another-probe/);
+  assert.match(text, /scenarios/);
+});
+
+test('提醒不冒充失败：它说的是流程没走完，不是哪条用例没通过', () => {
+  const text = probesLeftoverLines(['p1']).join('\n');
+  assert.doesNotMatch(text, /FAILED/);
+  assert.doesNotMatch(text, /未通过/);
+});
+
+// 探针目录里的 assert.mjs 不执行（ADR-0012）。但静默忽略会让「写了断言却没结论」
+// 变成一次无声的困惑——排查的人会先怀疑 harness。
+test('探针里放了 assert.mjs 时给出提示，说明它未被使用', () => {
+  const line = probeAssertNotice({ id: 'p1', kind: 'probe', dir: 'skill-tests/probes/p1', hasAssert: true });
+  assert.match(line, /assert\.mjs/);
+  assert.match(line, /未被使用/);
+  assert.match(line, /scenarios/);
+});
+
+test('探针没有 assert.mjs 时不提示', () => {
+  assert.equal(probeAssertNotice({ id: 'p1', kind: 'probe', dir: 'skill-tests/probes/p1', hasAssert: false }), null);
+});
+
+test('正式用例带了 assert.mjs 不触发探针提示', () => {
+  assert.equal(probeAssertNotice({ id: 's1', dir: 'x', kind: 'scenario', hasAssert: true }), null);
 });

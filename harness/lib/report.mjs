@@ -54,10 +54,18 @@ export function renderAssertions(results) {
 
 const VERDICT_HEADING = '## 判定';
 
+// 探针没有判定（ADR-0015）：标题换成「取样」，因为它的结论只说明
+// 「这份样本取到了」。沿用「判定」会让人以为 skill 被评过。
+const SAMPLE_HEADING = '## 取样';
+
+function headingFor(kind) {
+  return kind === 'probe' ? SAMPLE_HEADING : VERDICT_HEADING;
+}
+
 // broken 与 invalid 的报告形状一样：一句标题、一句原因、可选的失败项明细。
 // 区别只在措辞指向「改用例」还是「查原因」。
-function detailBlock(title, detail, results) {
-  const lines = [VERDICT_HEADING, '', `**${title}**`, '', detail];
+function detailBlock(title, detail, results, heading = VERDICT_HEADING) {
+  const lines = [heading, '', `**${title}**`, '', detail];
   if (results?.length) lines.push('', renderAssertions(results));
   return lines.join('\n');
 }
@@ -88,9 +96,13 @@ export function invalidLabel(cause) {
 const INCOMPLETE_HEADLINE = '**会话没正常结束，判定链未开始**';
 export const INCOMPLETE_FACT = '没有取终态快照，也没有跑任何断言';
 
-const INCOMPLETE_BLOCK = [
-  VERDICT_HEADING, '', INCOMPLETE_HEADLINE, '', `${INCOMPLETE_FACT}：这次会话没有产出可判的事实（见「会话」小节的退出码）。`,
-].join('\n');
+function incompleteBlock(heading = VERDICT_HEADING) {
+  return [
+    heading, '', INCOMPLETE_HEADLINE, '', `${INCOMPLETE_FACT}：这次会话没有产出可判的事实（见「会话」小节的退出码）。`,
+  ].join('\n');
+}
+
+const INCOMPLETE_BLOCK = incompleteBlock();
 
 // 清场门控（ADR-0014）：只有 PASSED 才清场，其余一律保留现场。报告与控制台
 // 共用这一句——两处各写一份，改一处就会漏另一处。
@@ -117,8 +129,17 @@ export function retentionReason(status) {
   return RETENTION_REASONS[status] ?? FALLBACK_RETENTION_REASON;
 }
 
-export function renderVerdict({ assertion }) {
-  const lines = [VERDICT_HEADING, ''];
+// 为什么没清场。探针的保留理由与判定结论无关——它无论结论如何都不清场（ADR-0015），
+// 所以这一句不能从 status 取，否则会写成「断言未通过」这种探针根本不成立的解释。
+export function retentionCause(manifest) {
+  return manifest.kind === 'probe'
+    ? '探针保留现场供人查看与写断言'
+    : retentionReason(manifest.assertion?.status);
+}
+
+export function renderVerdict({ assertion, kind }) {
+  const heading = headingFor(kind);
+  const lines = [heading, ''];
   if (assertion?.status === 'missing') {
     lines.push('**用例配置错误：缺断言**', '');
     lines.push('`scenarios/<id>/` 里没有 `assert.mjs`，本次没有开会话。补上断言，或把用例移到 `probes/`。');
@@ -126,17 +147,27 @@ export function renderVerdict({ assertion }) {
   }
   if (assertion?.status === 'broken') {
     // 用例自己的问题：断言模块坏了、没给出结果数组。修用例，不用改 skill。
-    return detailBlock('用例配置错误：断言没给出结果', assertion.detail ?? '断言模块没能给出结果数组。', assertion.results);
+    // 探针不会走到这里（它不跑断言），但旧 manifest 或接错线时仍要能渲染。
+    return detailBlock('用例配置错误：断言没给出结果', assertion.detail ?? '断言模块没能给出结果数组。', assertion.results, heading);
+  }
+  // 探针的成功词是 sampled（ADR-0015）：它只证明样本取到了，不证明 skill 对。
+  // 放在 incomplete / invalid 之前，因为它的分支措辞与后面的判定口径完全不同。
+  if (kind === 'probe' && assertion?.status === 'sampled') {
+    return [
+      heading, '',
+      '**已取样**', '',
+      '会话正常结束、可信度检查通过，终态快照已落盘。本次没有做任何判定——探针不跑断言。',
+    ].join('\n');
   }
   // 前置门先于三面：会话没正常结束时判定链没开始，后面几面都没有结论可写。
   // 只按 status 判，不按 session 退出码：旧 manifest 里「会话没跑完」落的是 skipped，
   // 按同一件事渲染；而旧 manifest 里可信度失败落的是 invalid，退出码同样非零——
   // 那次的快照取了、断言也跑了，按前置门写会说出一件没发生过的事。
-  if (assertion?.status === 'incomplete' || assertion?.status === 'skipped') return INCOMPLETE_BLOCK;
+  if (assertion?.status === 'incomplete' || assertion?.status === 'skipped') return incompleteBlock(heading);
   if (assertion?.status === 'invalid') {
     // 结果不可用，不当作 skill 缺陷（ADR-0012）。旧 manifest 没有 cause，退回通用标题。
     // 判定链在这一面就停了：只写这一面，不并排任何后面的结论（ADR-0014）。
-    return detailBlock(invalidTitle(assertion.cause), assertion.detail ?? '', assertion.results);
+    return detailBlock(invalidTitle(assertion.cause), assertion.detail ?? '', assertion.results, heading);
   }
   if (assertion?.status === 'failed') {
     // 与 invalid 的 cause=state 分开：那条指向重跑，这条指向改 skill。
@@ -166,7 +197,7 @@ export function renderReport(manifest) {
     return [
       `# ${manifest.scenario} · ${manifest.run}`,
       '',
-      renderVerdict({ assertion: manifest.assertion }),
+      renderVerdict({ assertion: manifest.assertion, kind: manifest.kind }),
     ].join('\n');
   }
   // 首行就是三个事实，人打开报告第一眼就能回答"测的是哪份 skill、哪个模型、沙箱在哪"。
@@ -178,7 +209,7 @@ export function renderReport(manifest) {
     '',
     created.length === 0 ? '（没有创建任何任务）' : taskTable(created),
     '',
-    renderVerdict({ assertion: manifest.assertion }),
+    renderVerdict({ assertion: manifest.assertion, kind: manifest.kind }),
     '',
     '## 清场',
     '',
@@ -187,7 +218,7 @@ export function renderReport(manifest) {
   if (cleanup.error) {
     lines.push(`**清场未执行**：${cleanup.error}`);
   } else if (cleanup.deferred) {
-    lines.push(`未清场：${retentionReason(manifest.assertion?.status)}。${retentionNote(manifest.run)}。`);
+    lines.push(`未清场：${retentionCause(manifest)}。${retentionNote(manifest.run)}。`);
   } else {
     lines.push(`按账本删除 ${cleanup.deleted?.length ?? 0} 条，失败 ${cleanup.failed?.length ?? 0} 条。`);
     if (cleanup.remaining?.length) {
@@ -201,6 +232,12 @@ export function renderReport(manifest) {
         ...cleanup.mismatched.map((e) => `- \`${e.id}\`：账本记在 ${e.recordedAt}，实际在 ${e.actual}`),
       );
     }
+  }
+
+  // 探针目录里的 assert.mjs 不执行（ADR-0012）。控制台与报告各留一行——
+  // 只在控制台说一遍，读报告的人会对着「没有结论」自己猜原因。
+  if (manifest.unusedAssert) {
+    lines.push('', `> 本目录的 \`assert.mjs\` 未被使用——断言只在 \`scenarios/\` 生效。`);
   }
 
   lines.push('', '## 会话', '');
@@ -249,15 +286,16 @@ export function renderSummary(manifest) {
   const created = manifest.created ?? [];
   const cleanup = manifest.cleanup ?? { deleted: [], failed: [], remaining: [], mismatched: [] };
   const skill = short(manifest.skill?.sha256);
+  const isProbe = manifest.kind === 'probe';
   const parts = [
-    `scenario ${manifest.scenario} 用 skill ${skill} 跑了一次真实会话，`,
+    `${isProbe ? '探针' : 'scenario'} ${manifest.scenario} 用 skill ${skill} 跑了一次真实会话，`,
     `${manifest.session?.turns ?? '?'} 轮、$${cost(manifest.session?.costUsd)}。`,
     created.length === 0
       ? '没有在测试清单里建任务。'
       : `在测试清单里建了 ${created.length} 条任务（${created.map((e) => e.id).join('、')}）。`,
   ];
   if (cleanup.deferred) {
-    parts.push(`${retentionReason(manifest.assertion?.status)}，任务与沙箱一并保留（${retentionNote(manifest.run)}）。`);
+    parts.push(`${retentionCause(manifest)}，任务与沙箱一并保留（${retentionNote(manifest.run)}）。`);
   } else if (cleanup.error) {
     parts.push(`清场未执行：${cleanup.error}`);
   } else {

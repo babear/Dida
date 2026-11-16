@@ -8,8 +8,8 @@ import { createSandbox, resolveRealDidaCmd, SKILL_NAME } from './lib/sandbox.mjs
 import { parseCmdShim } from './lib/shim.mjs';
 import { buildSessionArgv, runSession, parseTranscript, sanitizeEnv, sessionCompleted, summarizeTranscript } from './lib/session.mjs';
 import { defaultSettingsPath, ensureRunsDir, gitState, modelInfo, runId } from './lib/provenance.mjs';
-import { listScenarios, loadScenario } from './lib/scenario.mjs';
-import { decideAssertion, loadAssert } from './lib/assertion.mjs';
+import { listProbes, listScenarios, loadScenario } from './lib/scenario.mjs';
+import { decideAssertion, loadAssert, takeSample } from './lib/assertion.mjs';
 import { buildState } from './lib/state.mjs';
 import { crossCheck, crossCheckStatus, outOfBoundsCalls, parseCallLog, rejectedCalls } from './lib/calllog.mjs';
 import { readCreated } from './lib/created.mjs';
@@ -85,7 +85,11 @@ function emptyCleanup(overrides = {}) {
 // 按退出码判会把它清掉，而它的账本恰恰可能盖不全（绕过 shim 建的任务清不掉）。
 // hold 是操作者的显式要求（--hold：跑完不清场），与判定结论无关。
 // 沙箱保留是另一件事：--keep-sandbox 只留沙箱、照常清场（见 README 的参数表）。
-export function cleanupGate({ status, hold = false }) {
+//
+// 探针永不清场（ADR-0015）：按 kind 判而不是靠「探针结论不是 passed」这个巧合——
+// 探针将来多一个结论词，清场就会悄悄漏进来。
+export function cleanupGate({ status, hold = false, kind = 'scenario' }) {
+  if (kind === 'probe') return true;
   return status !== 'passed' || hold;
 }
 
@@ -106,6 +110,23 @@ export function retainedSummaryLines(entries) {
     ...entries.map((entry) => `  ${entry.run}  ${entry.scenario}  ${entry.status}`),
     '  确认后用 --clean <runId> 逐条收尾。',
   ];
+}
+
+// 全量运行不碰 probes/（ADR-0015），但 probes/ 里有残留说明流程没走完：
+// 断言写好了却没搬进 scenarios/，回归网就静默少一条。这是流程提醒，不是失败。
+export function probesLeftoverLines(ids) {
+  if (ids.length === 0) return [];
+  return [
+    `skill-tests/probes/ 里还有 ${ids.length} 条探针：${ids.join('、')}。`,
+    '  断言写好之后把它们搬进 scenarios/，否则它们不进回归网。',
+  ];
+}
+
+// 探针目录里的 assert.mjs 不执行（ADR-0012）。静默忽略会让「写了断言却没结论」
+// 变成一次无声的困惑——排查的人会先怀疑 harness。只提示，不报错。
+export function probeAssertNotice(scenario) {
+  if (scenario.kind !== 'probe' || !scenario.hasAssert) return null;
+  return `  提示：${path.join(scenario.dir, 'assert.mjs')} 未被使用——断言只在 scenarios/ 生效。`;
 }
 
 // 一条 run 的可信度结论：三面表的第一面，喂给 decideAssertion。
@@ -251,15 +272,17 @@ async function runOne(options, scenario, projects, assertionFn) {
     costUsd: summary.costUsd,
   };
 
-  // 五个状态的分界见 decideAssertion 的注释。判定本身不抛错，下面的 manifest 与清场总执行。
+  // 两条路径共享前三步（ADR-0015）：会话门 → 可信度检查 → 取快照。**岔路在快照之后**——
+  // 探针拿 sample 当结论就结束，scenario 拿它继续跑结局断言。分岔只发生在这一处
+  // 「选哪个消费者」上，不散在流水线内部：下游的 manifest、报告与清场都只看结论。
   //
-  // 快照在结局断言那一刻取（ADR-0014）：传的是闭包，不是取好的结果——会话没正常结束
-  // 或可信度检查不过时，判定链根本不会调它，那次清单枚举就省掉了。清场在这之后才跑，
-  // 「早于清场」由这里的位置保证：判定链返回之后才开始清场。
+  // 快照传的是闭包，不是取好的结果：会话没正常结束或可信度检查不过时，
+  // takeSample 根本不会调它，那次清单枚举就省掉了。清场在这之后才跑，
+  // 「早于清场」由这里的位置保证。
   const completed = sessionCompleted(session);
   const statePath = path.join(runDir, 'state.json');
   const credibility = credibilityOf({ calls, toolCalls: summary.toolCalls, events });
-  const assertion = await decideAssertion({
+  const sample = takeSample({
     completed,
     crossCheck: credibility,
     // 取快照要枚举清单一，那一步失败不能带走整次运行——下面的 manifest 与清场
@@ -268,15 +291,26 @@ async function runOne(options, scenario, projects, assertionFn) {
       statePath,
       build: () => buildState({ dida: realDida(), created, projects }),
     }),
-    assertionFn,
-    input: { created, calls, session: sessionInfo },
   });
+  const verdict = scenario.kind === 'probe'
+    // 探针不跑断言：共享段的结果就是它的结论（ADR-0015）。
+    ? sample
+    : await decideAssertion({
+      sample,
+      assertionFn,
+      input: { created, calls, session: sessionInfo },
+    });
   // 取到的事实以判定链实际取到的那份为准：断言读到的和报告写下的必须是同一份。
-  const { snapshot, ...verdict } = assertion;
+  // 快照要从 manifest 里剥掉——它已在 state.json 与 state 小节，再放一份等于
+  // 把整份任务清单复制进 manifest。
+  const { snapshot, ...verdictFields } = verdict;
 
   const manifest = {
     run: runKey,
     scenario: id,
+    kind: scenario.kind,
+    // 探针目录里的 assert.mjs 不执行，报告要据此留一行提示（ADR-0015）。
+    unusedAssert: scenario.kind === 'probe' && scenario.hasAssert,
     sandbox: sandbox.root,
     skill: {
       source: options.skillPath,
@@ -312,9 +346,9 @@ async function runOne(options, scenario, projects, assertionFn) {
       count: snapshot.status === 'ok' ? snapshot.state.length : null,
       error: snapshot.error,
     },
-    // 判定结论。快照本身不在这里重复一遍：它的内容已在 state.json 与 state 小节，
-    // 塞进来会让 manifest 大出一份清单内容的副本。
-    assertion: verdict,
+    // 判定结论（scenario）或取样结论（探针）。快照本身不在这里重复一遍：
+    // 它的内容已在 state.json 与 state 小节，塞进来会让 manifest 大出一份清单内容的副本。
+    assertion: verdictFields,
     testProjects: projects,
     callerMarker: sandbox.callerMarker,
   };
@@ -383,7 +417,7 @@ async function main() {
   node harness/run.mjs [--scenario <id>] [--skill-path <dir>] [--settings <file>] [--keep-sandbox] [--hold]
   node harness/run.mjs --clean <runId>
 
-  --scenario <id>     只跑这一条 scenario（默认全部）
+  --scenario <id>     只跑这一条（默认跑全部正式用例；id 也可命中 probes/ 里的探针）
   --skill-path <dir>  复制进沙箱的 skill 目录（默认 skills/dida-cli）
   --settings <file>   取 ANTHROPIC_* 键的来源（默认 ~/.claude/settings.json）
   --keep-sandbox      成功时也保留沙箱（不影响清场）
@@ -420,6 +454,10 @@ async function main() {
   const ids = options.scenario ? [options.scenario] : listScenarios(repoRoot);
   if (ids.length === 0) {
     console.error('no scenarios found');
+    // probes/ 里有东西恰恰解释了「为什么一条都没跑」：它们还没晋升。
+    if (!options.scenario) {
+      for (const line of probesLeftoverLines(listProbes(repoRoot))) console.error(line);
+    }
     process.exitCode = 1;
     return;
   }
@@ -441,36 +479,48 @@ async function main() {
       continue;
     }
     let assertionFn;
-    try {
-      assertionFn = await loadAssert(scenario.dir);
-    } catch (error) {
-      const { runKey, runDir } = writeUnusableRun(repoRoot, id, {
-        skillPath: options.skillPath,
-        status: 'broken',
-        detail: error.message,
-      });
-      console.error(`MISCONFIGURED ${id}  断言模块加载失败：${error.message}（报告 ${path.relative(repoRoot, runDir)}，run=${runKey}）`);
-      failures += 1;
-      continue;
+    // 探针不跑断言（ADR-0015）：目录里有 assert.mjs 也不加载它，那是留给搬进
+    // scenarios/ 之后的草稿。缺它更不是错误——这正是探针与 scenario 的分别。
+    if (scenario.kind === 'probe') {
+      assertionFn = null;
+    } else {
+      try {
+        assertionFn = await loadAssert(scenario.dir);
+      } catch (error) {
+        const { runKey, runDir } = writeUnusableRun(repoRoot, id, {
+          skillPath: options.skillPath,
+          status: 'broken',
+          detail: error.message,
+        });
+        console.error(`MISCONFIGURED ${id}  断言模块加载失败：${error.message}（报告 ${path.relative(repoRoot, runDir)}，run=${runKey}）`);
+        failures += 1;
+        continue;
+      }
+      if (!assertionFn) {
+        const assertPath = path.join(scenario.dir, 'assert.mjs');
+        const { runKey, runDir } = writeUnusableRun(repoRoot, id, {
+          skillPath: options.skillPath,
+          status: 'missing',
+          detail: `缺 ${assertPath}`,
+        });
+        console.error(`MISCONFIGURED ${id}  缺断言：${path.relative(repoRoot, assertPath)}（报告 ${path.relative(repoRoot, runDir)}，run=${runKey}）`);
+        failures += 1;
+        continue;
+      }
     }
-    if (!assertionFn) {
-      const assertPath = path.join(scenario.dir, 'assert.mjs');
-      const { runKey, runDir } = writeUnusableRun(repoRoot, id, {
-        skillPath: options.skillPath,
-        status: 'missing',
-        detail: `缺 ${assertPath}`,
-      });
-      console.error(`MISCONFIGURED ${id}  缺断言：${path.relative(repoRoot, assertPath)}（报告 ${path.relative(repoRoot, runDir)}，run=${runKey}）`);
-      failures += 1;
-      continue;
-    }
+
+    const notice = probeAssertNotice(scenario);
+    if (notice) console.log(notice);
 
     const { run, runDir, sandbox, manifest, session, createdFile } = await runOne(options, scenario, projects, assertionFn);
     const completed = sessionCompleted(session);
 
-    // 只有 PASSED 才清场（ADR-0014）。旧门控是「会话没正常结束才不清场」，
-    // 断言失败照清——而失败的时刻恰恰最需要对着任务清单查原因。
-    const defer = cleanupGate({ status: manifest.assertion.status, hold: options.hold });
+    // 只有 PASSED 才清场（ADR-0014）；探针则永不清场（ADR-0015）。
+    const defer = cleanupGate({
+      status: manifest.assertion.status,
+      hold: options.hold,
+      kind: scenario.kind,
+    });
     // 沙箱保留与清场是两件事：--keep-sandbox 只留沙箱，照常清场（README 参数表）。
     const retained = defer || options.keepSandbox;
 
@@ -494,17 +544,23 @@ async function main() {
     // 清场失败只记 log 不中断：每条 scenario 的账本按 runId 隔离，删不掉自己的那几条
     // 不会影响下一条的判断。退出码仍非零，让人知道有现场要收。
     const cleanupProblem = hasCleanupProblem(cleanup);
-    // 除 passed 外都要非零：failed 是 skill 有缺陷，broken 是用例有缺陷，
-    // invalid 是结果不可用（快照取不到、日志与轨迹对不上，或轨迹读不出）——三者都要人看一眼，不能安静地算通过。
-    if (!completed || cleanupProblem || manifest.assertion.status !== 'passed') failures += 1;
+    // 退出码只反映「这次运行能不能用」（ADR-0015）：
+    //   scenario：除 passed 外都要非零——failed 是 skill 有缺陷，broken 是用例有缺陷，
+    //            invalid 是结果不可用，三者都要人看一眼。
+    //   探针：只有 sampled 是 0。incomplete / invalid 说明这份样本不能用，
+    //        1 就是在告诉脚本「别拿它写断言」。
+    const ok = manifest.assertion.status === (scenario.kind === 'probe' ? 'sampled' : 'passed');
+    if (!completed || cleanupProblem || !ok) failures += 1;
 
-    const verdict = {
-      passed: 'PASSED',
-      incomplete: 'INCOMPLETE',
-      failed: 'FAILED',
-      broken: 'BROKEN',
-      invalid: 'INVALID',
-    }[manifest.assertion.status];
+    const verdict = scenario.kind === 'probe'
+      ? { sampled: 'SAMPLED', incomplete: 'INCOMPLETE', invalid: 'INVALID' }[manifest.assertion.status]
+      : {
+        passed: 'PASSED',
+        incomplete: 'INCOMPLETE',
+        failed: 'FAILED',
+        broken: 'BROKEN',
+        invalid: 'INVALID',
+      }[manifest.assertion.status];
     console.log(`${verdict} ${id}  run=${run}`);
     console.log(`  skill sha256=${manifest.skill.sha256.slice(0, 16)} files=${manifest.skill.files} git=${manifest.skill.git.rev?.slice(0, 12)}${manifest.skill.git.dirty ? ' (dirty)' : ''}`);
     console.log(`  model alias=${manifest.model.requested_alias} provider=${manifest.model.provider}（别名不等于实际执行模型，真实映射见 manifest.model.alias_mapping）`);
@@ -523,6 +579,9 @@ async function main() {
   // 批跑汇总（ADR-0014）：失败即留现场，跑十条挂六条就是六批任务。
   // 没有这份清单，人下次打开客户端无从追溯该收哪几条。
   for (const line of retainedSummaryLines(retainedRuns)) console.log(line);
+  // 探针不参与全量运行，但残留在 probes/ 里说明流程没走完（ADR-0015）。
+  // 只在全量运行时提醒：单跑一条探针时它本来就该待在那儿。
+  if (!options.scenario) for (const line of probesLeftoverLines(listProbes(repoRoot))) console.log(line);
   if (failures > 0) process.exitCode = 1;
 }
 
