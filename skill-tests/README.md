@@ -20,7 +20,7 @@ skill-tests/
 | `preset.mjs` | 可选。声明要建的任务，会话前由 harness 用真 CLI 执行 | 无 |
 | `assert.mjs` | 结局断言。默认导出 `{tasks, created, calls, session} => 结果数组` | 无 |
 
-判定分三面、按顺序短路，见 `harness/README.md` 的「判定」与 ADR-0012。
+判定分三面、按**严格顺序**短路：可信度检查 → 结局断言 → 过程断言，前一面不过就不算后面；会话正常结束是前置门。见 `harness/README.md` 的「判定」与 ADR-0014。
 
 `scenarios/<id>/` 里**必须有 `assert.mjs`**。缺了不跑会话，直接报错退出——否则漏写或误删断言的用例会让回归网静默少一条。还没写断言的用例放 `probes/`，不放在 `scenarios/`。
 
@@ -80,7 +80,7 @@ node harness/run.mjs --scenario <id>   # #20 落地前，探针还只能放在 s
 
 | 文件 | 看什么 |
 |---|---|
-| `state.json` | 账本里每条任务的完整现状。按测试清单枚举定位，枚举不到才回退账本的 `projectId`。断言读的就是它 |
+| `state.json` | 账本里每条任务的完整现状。按测试清单枚举定位，枚举不到才回退账本的 `projectId`。断言读的就是它。**探针是独立流程、不参与判定，因此不受判定链与清场门控约束**；而一次正式用例的可信度检查不过时不会产出这个文件 |
 | `calls.ndjson` | 被测 agent 实际调了哪些 dida 命令，argv 是解析后的数组 |
 | `trace.ndjson` | agent 的完整步骤。只在需要看它为什么这么做时读 |
 
