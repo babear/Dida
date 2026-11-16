@@ -19,11 +19,22 @@ function writeAssert(t, source) {
 }
 
 const INPUT = {
-  tasks: [{ id: 'a', kind: 'TEXT' }],
   created: [{ id: 'a', origin: 'agent' }],
   calls: [],
   session: { exitCode: 0 },
 };
+
+const CONSISTENT = { status: 'consistent', detail: '1 条 dida 调用 / 1 次 PowerShell' };
+
+// 取快照成功的最小替身。快照只在可信度检查通过之后才被调用（ADR-0014），
+// 因此下面每个「过了前置门与可信度」的用例都要显式给出它。
+function okSnapshot(tasks = [{ id: 'a', kind: 'TEXT' }]) {
+  return () => ({ status: 'ok', state: tasks, error: null });
+}
+
+function failSnapshot(error = '网络抖动') {
+  return () => ({ status: 'failed', state: [], error });
+}
 
 test('用例目录里有 assert.mjs 时加载它的默认导出', async (t) => {
   const dir = writeAssert(t, 'export default function assert() { return [{ ok: true, name: "x" }]; }\n');
@@ -41,7 +52,7 @@ test('断言函数原样收到 tasks / created / calls / session', async (t) => 
     t,
     'export default function assert(input) { return [{ ok: true, name: "input", expected: input.tasks.length, actual: input.tasks.length }]; }\n',
   );
-  const { usable, results } = await runAssert(await loadAssert(dir), INPUT);
+  const { usable, results } = await runAssert(await loadAssert(dir), { ...INPUT, tasks: [{ id: 'a' }] });
   assert.equal(usable, true);
   assert.deepEqual(results, [{ ok: true, name: 'input', expected: 1, actual: 1 }]);
 });
@@ -93,18 +104,21 @@ test('元素缺布尔 ok 时也算形状不对', async () => {
   assert.match(results[0].name, /形状不对/);
 });
 
-// 前置门：会话没正常结束时判定链根本不开始（ADR-0014）。快照取没取到都不该
-// 走到断言模块——断言模块被调用这件事本身就是「判定链开始了」的证据。
-test('会话没正常结束 → incomplete，断言不评', async () => {
+// 前置门：会话没正常结束时判定链根本不开始（ADR-0014）。快照与断言都不该被碰到——
+// 它们被调用这件事本身就是「判定链开始了」的证据。
+test('会话没正常结束 → incomplete，快照不取、断言不评', async () => {
+  let taken = 0;
   let called = 0;
   const out = await decideAssertion({
     completed: false,
-    stateFailed: false,
+    takeSnapshot: () => { taken += 1; return { status: 'ok', state: [], error: null }; },
     assertionFn: () => { called += 1; return [{ ok: true }]; },
     input: INPUT,
   });
   assert.equal(out.status, 'incomplete');
+  assert.equal(taken, 0);
   assert.equal(called, 0);
+  assert.equal(out.snapshot.status, 'not-taken');
 });
 
 test('会话没正常结束时，前置门先于可信度检查：可信度不过也报 incomplete', async () => {
@@ -112,7 +126,7 @@ test('会话没正常结束时，前置门先于可信度检查：可信度不�
   const out = await decideAssertion({
     completed: false,
     crossCheck: { status: 'inconsistent', detail: '3 条 dida 调用 / 10 次 PowerShell' },
-    stateFailed: false,
+    takeSnapshot: () => { throw new Error('不该被调用'); },
     assertionFn: () => { called += 1; return [{ ok: true }]; },
     input: INPUT,
   });
@@ -121,44 +135,52 @@ test('会话没正常结束时，前置门先于可信度检查：可信度不�
   assert.equal(called, 0);
 });
 
-test('会话没正常结束且快照取不到时也是 incomplete，不报 invalid(state)', async () => {
+test('会话没正常结束时不进入快照那一面，也就没有 cause', async () => {
   const out = await decideAssertion({
     completed: false,
-    stateFailed: true,
-    stateError: '网络抖动',
+    takeSnapshot: () => { throw new Error('不该被调用'); },
     assertionFn: () => { throw new Error('不该被调用'); },
     input: INPUT,
   });
   assert.equal(out.status, 'incomplete');
-  assert.equal(out.cause, undefined, '前置门不过，不进入快照那一面');
+  assert.equal(out.cause, undefined);
 });
 
 test('断言全过 → passed', async () => {
-  const out = await decideAssertion({ completed: true, stateFailed: false, assertionFn: () => [{ ok: true }], input: INPUT });
+  const out = await decideAssertion({
+    completed: true, crossCheck: CONSISTENT, takeSnapshot: okSnapshot(),
+    assertionFn: () => [{ ok: true }], input: INPUT,
+  });
   assert.equal(out.status, 'passed');
 });
 
 test('断言有失败项 → failed（去改 skill）', async () => {
-  const out = await decideAssertion({ completed: true, stateFailed: false, assertionFn: () => [{ ok: false, name: 'x' }], input: INPUT });
+  const out = await decideAssertion({
+    completed: true, crossCheck: CONSISTENT, takeSnapshot: okSnapshot(),
+    assertionFn: () => [{ ok: false, name: 'x' }], input: INPUT,
+  });
   assert.equal(out.status, 'failed');
 });
 
-test('快照取不到 → invalid（重跑），不是 failed', async () => {
+test('快照取不到 → invalid（重跑），不是 failed，断言不跑', async () => {
+  let called = 0;
   const out = await decideAssertion({
     completed: true,
-    stateFailed: true,
-    stateError: '网络抖动',
-    assertionFn: () => { throw new Error('不该被调用'); },
+    crossCheck: CONSISTENT,
+    takeSnapshot: failSnapshot(),
+    assertionFn: () => { called += 1; return [{ ok: true }]; },
     input: INPUT,
   });
   assert.equal(out.status, 'invalid');
+  assert.equal(out.cause, 'state');
   assert.match(out.detail, /网络抖动/);
+  assert.match(out.detail, /重跑/);
+  assert.equal(called, 0, '快照取不到时断言没有可读的事实');
 });
 
 test('断言模块抛异常 → broken（去改用例），不是 failed', async () => {
   const out = await decideAssertion({
-    completed: true,
-    stateFailed: false,
+    completed: true, crossCheck: CONSISTENT, takeSnapshot: okSnapshot(),
     assertionFn: () => { throw new Error('崩了'); },
     input: INPUT,
   });
@@ -167,7 +189,10 @@ test('断言模块抛异常 → broken（去改用例），不是 failed', async
 });
 
 test('断言返回非数组 → broken（去改用例）', async () => {
-  const out = await decideAssertion({ completed: true, stateFailed: false, assertionFn: () => 'nope', input: INPUT });
+  const out = await decideAssertion({
+    completed: true, crossCheck: CONSISTENT, takeSnapshot: okSnapshot(),
+    assertionFn: () => 'nope', input: INPUT,
+  });
   assert.equal(out.status, 'broken');
 });
 
@@ -177,7 +202,8 @@ test('归一化阶段自己炸了（坏了元素的 actual 循环引用）也不
   // 元素没有布尔 ok → 走 normalizeResult 的 JSON.stringify 分支，循环引用会抛
   const out = await decideAssertion({
     completed: true,
-    stateFailed: false,
+    crossCheck: CONSISTENT,
+    takeSnapshot: okSnapshot(),
     assertionFn: () => [{ name: 'x', actual: circular }],
     input: INPUT,
   });
@@ -186,52 +212,57 @@ test('归一化阶段自己炸了（坏了元素的 actual 循环引用）也不
 });
 
 test('快照失败的空消息也判 invalid，不靠 message 的真假', async () => {
-  // 用布尔标志表达失败：空消息的 error 会让「if (stateError)」变 falsy，
+  // 用布尔标志表达失败：空消息的 error 会让「if (error)」变 falsy，
   // 那样会写下空 state.json 并让断言在 [] 上判 FAILED。
   const out = await decideAssertion({
     completed: true,
-    stateFailed: true,
-    stateError: '',
+    crossCheck: CONSISTENT,
+    takeSnapshot: failSnapshot(''),
     assertionFn: () => [{ ok: true }],
     input: INPUT,
   });
   assert.equal(out.status, 'invalid');
 });
 
-test('可信度检查不一致 → invalid，先于快照失败，且不是 broken/failed', async () => {
+test('可信度检查不一致 → invalid，且快照不取、断言不跑', async () => {
+  let taken = 0;
+  let called = 0;
   const out = await decideAssertion({
     completed: true,
     crossCheck: { status: 'inconsistent', detail: '3 条 dida 调用 / 10 次 PowerShell' },
-    stateFailed: true,
-    stateError: '网络抖动',
-    assertionFn: () => [{ ok: true }],
+    takeSnapshot: () => { taken += 1; return { status: 'ok', state: [], error: null }; },
+    assertionFn: () => { called += 1; return [{ ok: true }]; },
     input: INPUT,
   });
   assert.equal(out.status, 'invalid');
   assert.equal(out.cause, 'cross-check');
   assert.match(out.detail, /3 条 dida 调用 \/ 10 次 PowerShell/);
   assert.match(out.detail, /重跑不一定能解决/);
+  assert.equal(taken, 0, '快照的唯一消费者是结局断言，这一面已经红了');
+  assert.equal(called, 0);
+  assert.equal(out.snapshot.status, 'not-taken');
 });
 
-test('可信度检查无法判定 → invalid，cause=indeterminate，措辞与「不一致」分开', async () => {
+test('可信度检查无法判定 → invalid，cause=indeterminate，快照同样不取', async () => {
+  let taken = 0;
   const out = await decideAssertion({
     completed: true,
     crossCheck: { status: 'indeterminate', detail: '0 条 dida 调用 / 0 次 PowerShell' },
-    stateFailed: false,
+    takeSnapshot: () => { taken += 1; return { status: 'ok', state: [], error: null }; },
     assertionFn: () => [{ ok: true }],
     input: INPUT,
   });
   assert.equal(out.status, 'invalid');
   assert.equal(out.cause, 'indeterminate');
   assert.match(out.detail, /轨迹读不出可解析的事件/);
+  assert.equal(taken, 0);
 });
 
 test('快照失败带 cause=state，措辞指向重跑', async () => {
   const out = await decideAssertion({
     completed: true,
-    crossCheck: { status: 'consistent', detail: '3 条 dida 调用 / 3 次 PowerShell' },
-    stateFailed: true,
-    stateError: '网络抖动',
+    crossCheck: CONSISTENT,
+    takeSnapshot: failSnapshot(),
     assertionFn: () => [{ ok: true }],
     input: INPUT,
   });
@@ -242,27 +273,21 @@ test('快照失败带 cause=state，措辞指向重跑', async () => {
 
 test('可信度检查通过时不影响断言判定', async () => {
   const passed = await decideAssertion({
-    completed: true,
-    crossCheck: { status: 'consistent', detail: '1 条 dida 调用 / 1 次 PowerShell' },
-    stateFailed: false,
-    assertionFn: () => [{ ok: true }],
-    input: INPUT,
+    completed: true, crossCheck: CONSISTENT, takeSnapshot: okSnapshot(),
+    assertionFn: () => [{ ok: true }], input: INPUT,
   });
   assert.equal(passed.status, 'passed');
 
   const failed = await decideAssertion({
-    completed: true,
-    crossCheck: { status: 'consistent', detail: '1 条 dida 调用 / 1 次 PowerShell' },
-    stateFailed: false,
-    assertionFn: () => [{ ok: false, name: 'x' }],
-    input: INPUT,
+    completed: true, crossCheck: CONSISTENT, takeSnapshot: okSnapshot(),
+    assertionFn: () => [{ ok: false, name: 'x' }], input: INPUT,
   });
   assert.equal(failed.status, 'failed');
 });
 
 test('不传 crossCheck（旧调用方）时行为与之前一致', async () => {
   const out = await decideAssertion({
-    completed: true, stateFailed: false, assertionFn: () => [{ ok: true }], input: INPUT,
+    completed: true, takeSnapshot: okSnapshot(), assertionFn: () => [{ ok: true }], input: INPUT,
   });
   assert.equal(out.status, 'passed');
 });
@@ -270,9 +295,7 @@ test('不传 crossCheck（旧调用方）时行为与之前一致', async () => 
 test('会话正常结束且可信度通过时，才轮到结局断言', async () => {
   let called = 0;
   const out = await decideAssertion({
-    completed: true,
-    crossCheck: { status: 'consistent', detail: '1 条 dida 调用 / 1 次 PowerShell' },
-    stateFailed: false,
+    completed: true, crossCheck: CONSISTENT, takeSnapshot: okSnapshot(),
     assertionFn: () => { called += 1; return [{ ok: true }]; },
     input: INPUT,
   });
@@ -290,6 +313,7 @@ test('可信度不一致时断言模块不被调用，只留可信度这一面�
   const out = await decideAssertion({
     completed: true,
     crossCheck: { status: 'inconsistent', detail: '3 条 dida 调用 / 4 次 PowerShell' },
+    takeSnapshot: () => { throw new Error('不该被调用'); },
     assertionFn: () => {
       called += 1;
       return [{ ok: false, name: '父任务应为 TEXT', expected: 'TEXT', actual: 'CHECKLIST' }];
@@ -308,6 +332,7 @@ test('可信度无法判定时断言模块同样不被调用', async () => {
   const out = await decideAssertion({
     completed: true,
     crossCheck: { status: 'indeterminate', detail: '0 条 dida 调用 / 0 次 PowerShell' },
+    takeSnapshot: () => { throw new Error('不该被调用'); },
     assertionFn: () => { called += 1; return [{ ok: true }]; },
     input: INPUT,
   });
@@ -321,6 +346,7 @@ test('可信度条数与原因写进 results，不因短路而丢', async () => 
   const out = await decideAssertion({
     completed: true,
     crossCheck: { status: 'inconsistent', detail: '3 条 dida 调用 / 4 次 PowerShell' },
+    takeSnapshot: () => { throw new Error('不该被调用'); },
     assertionFn: () => { throw new Error('不该被调用'); },
     input: INPUT,
   });
@@ -331,27 +357,67 @@ test('可信度条数与原因写进 results，不因短路而丢', async () => 
   assert.equal(out.results.length, 1);
 });
 
-// state.json 与 completed 无关的那套旧语义已作废（ADR-0014）：会话没正常结束时
-// 既不取快照也不跑断言，状态只有一个词。会话正常结束时的各面判定见上面的用例。
-
-test('会话没跑完且快照也没取到时，同样只是 incomplete', async () => {
-  let called = 0;
-  const out = await decideAssertion({
-    completed: false,
-    crossCheck: { status: 'consistent', detail: '0 / 0' },
-    stateFailed: true,
-    stateError: '网络抖动',
-    assertionFn: () => { called += 1; return [{ ok: true }]; },
+// 快照的位置约束只剩两条：在可信度检查之后、在清场之前（ADR-0014）。
+// 「之后」由上面那组「可信度失败时 taken=0」的用例钉住，「先于断言」由下面这条钉住。
+test('快照先于断言取——断言读的就是刚取到的事实', async () => {
+  const order = [];
+  await decideAssertion({
+    completed: true,
+    crossCheck: CONSISTENT,
+    takeSnapshot: () => { order.push('snapshot'); return { status: 'ok', state: [], error: null }; },
+    assertionFn: () => { order.push('assert'); return [{ ok: true }]; },
     input: INPUT,
   });
-  assert.equal(out.status, 'incomplete');
+  assert.deepEqual(order, ['snapshot', 'assert']);
+});
+
+test('断言收到的 tasks 只能来自这一次的快照', async () => {
+  let seen;
+  const tasks = [{ id: 'fresh' }];
+  await decideAssertion({
+    completed: true,
+    crossCheck: CONSISTENT,
+    takeSnapshot: () => ({ status: 'ok', state: tasks, error: null }),
+    assertionFn: (input) => { seen = input.tasks; return [{ ok: true }]; },
+    input: { ...INPUT, tasks: [{ id: 'stale' }] },
+  });
+  assert.deepEqual(seen, tasks);
+});
+
+// 快照这一面红了就停：它不可用时断言读到的是 []，那组结论只会把人引偏。
+test('快照取不到时断言不被调用，也不并排任何断言结论', async () => {
+  let called = 0;
+  const out = await decideAssertion({
+    completed: true,
+    crossCheck: CONSISTENT,
+    takeSnapshot: failSnapshot(),
+    assertionFn: () => { called += 1; return [{ ok: false, name: '父任务应为 TEXT' }]; },
+    input: INPUT,
+  });
   assert.equal(called, 0);
+  assert.equal(out.status, 'invalid');
+  assert.deepEqual(out.results.map((result) => result.name), ['终态快照不可用']);
+});
+
+test('可信度失败时 detail 里不并加快照错误——快照根本没取过', async () => {
+  const out = await decideAssertion({
+    completed: true,
+    crossCheck: { status: 'inconsistent', detail: '3 / 4' },
+    takeSnapshot: () => { throw new Error('不该被调用'); },
+    assertionFn: () => [{ ok: true }],
+    input: INPUT,
+  });
+  assert.equal(out.status, 'invalid');
+  assert.equal(out.cause, 'cross-check');
+  assert.doesNotMatch(out.detail, /终态快照/);
+  assert.equal(Object.hasOwn(out, 'evaluated'), false);
 });
 
 test('可信度结果行的 expected 不声称「调用都能归因」——条数不等不等于有调用没被记录', async () => {
   const out = await decideAssertion({
     completed: true,
     crossCheck: { status: 'inconsistent', detail: '3 / 4' },
+    takeSnapshot: () => { throw new Error('不该被调用'); },
     assertionFn: () => [{ ok: true }],
     input: INPUT,
   });
@@ -360,17 +426,18 @@ test('可信度结果行的 expected 不声称「调用都能归因」——条�
   assert.match(row.actual, /不等于有调用没被记录/);
 });
 
-test('可信度与快照同时失败时，快照错误也并进 detail', async () => {
+// state.json 与 completed 无关的那套旧语义已作废（ADR-0014）：会话没正常结束时
+// 既不取快照也不跑断言，状态只有一个词。会话正常结束时的各面判定见上面的用例。
+
+test('会话没跑完时即使快照构建会失败，也只是 incomplete', async () => {
+  let called = 0;
   const out = await decideAssertion({
-    completed: true,
-    crossCheck: { status: 'inconsistent', detail: '3 / 4' },
-    stateFailed: true,
-    stateError: '网络抖动',
-    assertionFn: () => [{ ok: true }],
+    completed: false,
+    crossCheck: { status: 'consistent', detail: '0 / 0' },
+    takeSnapshot: () => { throw new Error('不该被调用'); },
+    assertionFn: () => { called += 1; return [{ ok: true }]; },
     input: INPUT,
   });
-  assert.equal(out.status, 'invalid');
-  assert.equal(out.cause, 'cross-check');
-  assert.match(out.detail, /网络抖动/);
-  assert.equal(Object.hasOwn(out, 'evaluated'), false, 'evaluated 已拆除，快照错误只并进 detail');
+  assert.equal(out.status, 'incomplete');
+  assert.equal(called, 0);
 });

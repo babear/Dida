@@ -102,34 +102,32 @@ export function hasCleanupProblem(cleanup) {
     || cleanup.remaining.length > 0;
 }
 
-// 终态快照受前置门约束（ADR-0014）：会话没正常结束时判定链根本不开始，build 一次都不调、
-// state.json 不落盘。会话正常结束时才取，并落盘供重放——断言逻辑改了之后能用同一份
-// 事实重放，不必重新烧一次 API。取失败时不写文件：写一份空数组会让人以为
-// 「这次一条任务都没有」，重放时读出的是假事实。文件缺失才是诚实的。
+// 终态快照的构建。**要不要取由判定链决定**（assertion.mjs 的 decideAssertion）：
+// 会话正常结束是前置门、可信度检查通过是第二道，两道都过了才轮到这里。这里只负责
+// 取一次并落盘，不自己再判一遍——两处各判一次，就会出现「判定链说没取、这里说取了」。
 //
-// 三种情形收在一个 status 里，不让调用方拿「空数组 + 布尔」二次推导：
-//   not-started  前置门没过，没取     → 没有 state.json，清单条数无意义（null）
-//   failed       取了但失败           → 没有 state.json，错误在 error
-//   ok           取到了               → state.json 已落盘
+// 取失败时不写文件：写一份空数组会让人以为「这次一条任务都没有」，重放时读出的是假事实。
+// 文件缺失才是诚实的。写盘本身也可能失败（磁盘满、权限），同样折成 failed 而不是抛出——
+// 抛出会让判定链中断，manifest 落不下、清场不跑，任务就留在真实清单里没人删。
+//
 // error 与 status 分开：错误消息可能是空串，靠 message 的真假判失败会把
 // 空消息的 error 当成成功，写下空 state.json 并让断言在 [] 上判 FAILED。
-export function takeState({ completed, statePath, build }) {
-  if (!completed) return { status: 'not-started', state: [], error: null };
-  let state;
+export function takeState({ statePath, build }) {
   try {
-    state = build();
+    const state = build();
+    fs.writeFileSync(statePath, JSON.stringify(state, null, 2));
+    return { status: 'ok', state, error: null };
   } catch (error) {
     return { status: 'failed', state: [], error: error.message || String(error) };
   }
-  fs.writeFileSync(statePath, JSON.stringify(state, null, 2));
-  return { status: 'ok', state, error: null };
 }
 
-// 控制台上的快照那一行。三种情形各说各的：前置门没过（根本没取）、取了但失败（故障）、
-// 取到了。把前两种混成「未落盘」会让人把「没开始」读成「取失败」，而它们的处理方式相反。
+// 控制台上的快照那一行。三种情形各说各的：没取（判定链在前一面就停了）、取了但失败
+// （故障）、取到了。把前两种混成「未落盘」会让人把「没开始」读成「取失败」，
+// 而它们的处理方式相反。没取的原因（前置门 / 可信度）由判定那一行负责说明。
 export function stateLine(manifest) {
   const state = manifest.state ?? {};
-  if (state.status === 'not-started') return '  state=未取（会话没正常结束，判定链未开始）';
+  if (state.status === 'not-taken') return '  state=未取（判定链在前一面就停了）';
   if (state.status === 'failed') return `  state=未落盘（${state.error}）`;
   return `  state=${path.relative(repoRoot, state.path ?? '')}（${state.count} 条）`;
 }
@@ -206,19 +204,6 @@ async function runOne(options, scenario, projects, assertionFn) {
   const created = readCreated(createdFile);
   const calls = fs.existsSync(callLogPath) ? parseCallLog(fs.readFileSync(callLogPath, 'utf8')) : [];
 
-  // 终态快照受前置门约束（ADR-0014）：会话没正常结束时判定链根本不开始，不取快照、
-  // 不落 state.json——一次没跑完的会话没有产出可判的事实，取到的清单只可能停在半路。
-  // 会话正常结束时，快照仍必须早于清场：清场删的正是这些任务，删完再取只能拿到 null。
-  const completed = sessionCompleted(session);
-  const statePath = path.join(runDir, 'state.json');
-  const snapshot = takeState({
-    completed,
-    statePath,
-    // 取快照要枚举清单一，那一步失败不能带走整次运行——下面的 manifest 与清场
-    // 必须照常执行，否则任务建在真实清单里却没人删。
-    build: () => buildState({ dida: realDida(), created, projects }),
-  });
-
   const sessionInfo = {
     exitCode: session.exitCode,
     timedOut: session.timedOut,
@@ -227,15 +212,27 @@ async function runOne(options, scenario, projects, assertionFn) {
   };
 
   // 五个状态的分界见 decideAssertion 的注释。判定本身不抛错，下面的 manifest 与清场总执行。
+  //
+  // 快照在结局断言那一刻取（ADR-0014）：传的是闭包，不是取好的结果——会话没正常结束
+  // 或可信度检查不过时，判定链根本不会调它，那次清单枚举就省掉了。清场在这之后才跑，
+  // 「早于清场」由这里的位置保证：判定链返回之后才开始清场。
+  const completed = sessionCompleted(session);
+  const statePath = path.join(runDir, 'state.json');
   const credibility = credibilityOf({ calls, toolCalls: summary.toolCalls, events });
   const assertion = await decideAssertion({
     completed,
     crossCheck: credibility,
-    stateFailed: snapshot.status === 'failed',
-    stateError: snapshot.error,
+    // 取快照要枚举清单一，那一步失败不能带走整次运行——下面的 manifest 与清场
+    // 必须照常执行，否则任务建在真实清单里却没人删。takeState 把失败折成 status。
+    takeSnapshot: () => takeState({
+      statePath,
+      build: () => buildState({ dida: realDida(), created, projects }),
+    }),
     assertionFn,
-    input: { tasks: snapshot.state, created, calls, session: sessionInfo },
+    input: { created, calls, session: sessionInfo },
   });
+  // 取到的事实以判定链实际取到的那份为准：断言读到的和报告写下的必须是同一份。
+  const { snapshot, ...verdict } = assertion;
 
   const manifest = {
     run: runKey,
@@ -267,15 +264,17 @@ async function runOne(options, scenario, projects, assertionFn) {
       crossCheck: credibility,
     },
     created,
-    // status 三态照 takeState；count 为 null 表示「没有可数的事实」——没取（前置门没过）
-    // 或取失败都落 null，与「取到了、0 条」区分开。
+    // status 三态：not-taken（判定链在前一面就停了，没取）/ failed（取了但失败）/
+    // ok（取到了）。count 为 null 表示「没有可数的事实」——前两种都落 null，与「取到了、0 条」区分开。
     state: {
       path: statePath,
       status: snapshot.status,
       count: snapshot.status === 'ok' ? snapshot.state.length : null,
       error: snapshot.error,
     },
-    assertion,
+    // 判定结论。快照本身不在这里重复一遍：它的内容已在 state.json 与 state 小节，
+    // 塞进来会让 manifest 大出一份清单内容的副本。
+    assertion: verdict,
     testProjects: projects,
     callerMarker: sandbox.callerMarker,
   };
