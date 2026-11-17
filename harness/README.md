@@ -158,7 +158,7 @@ run-<runId>/
 
 ## shim
 
-沙箱 `bin/` 下有这些文件：
+沙箱 `shim/` 下有这些文件（不在 agent 的 cwd 里，只经 PATH 暴露）：
 
 - `dida.ps1`：一行 PowerShell 壳，`node dida-shim.mjs <node 可执行> <真 CLI 脚本> @args`。PowerShell 同目录内优先命中它，`@args` 原样展开，多行参数保真。
 - `dida.cmd`：一行 shell 壳，`node dida-shim.mjs <node 可执行> <真 CLI 脚本> %*`。供 agent 显式写 `dida.cmd` 全名时使用；这一路的多行与空串值都会失真。
@@ -193,7 +193,7 @@ run-<runId>/
 - 参数解析复刻 commander 语义：`--flag=value`、flag 夹在位置参数中间、`--` 之后一律当位置参数、重复 flag 全部校验、`--project=` 空值视为解析不出目标。
 - 写命令缺 `--project` 时错误文本与真 CLI 不同（真 CLI 报 required option），两条路都写不出去。
 
-**已知边界**：沙箱 `bin/` 里放 `dida.ps1` 与 `dida.cmd` 两份壳。PowerShell 同目录内优先命中 `.ps1`，其 `@args` 原样展开、多行 `--content` 保真；显式写 `dida.cmd` 时会落到 `.cmd`，那里的 `%*` 仍把多行截成第一行。agent 仍可用绝对路径直接调真 `dida.cmd` / `dida.ps1` 绕过 shim，`crossCheck` 逐调用比对会点名那几次调用「在日志里找不到对应」；`node <脚本>` 入口不在判据范围内。
+**已知边界**：沙箱 `shim/` 里放 `dida.ps1` 与 `dida.cmd` 两份壳。PowerShell 同目录内优先命中 `.ps1`，其 `@args` 原样展开、多行 `--content` 保真；显式写 `dida.cmd` 时会落到 `.cmd`，那里的 `%*` 仍把多行截成第一行。agent 仍可用绝对路径直接调真 `dida.cmd` / `dida.ps1` 绕过 shim，`crossCheck` 逐调用比对会点名那几次调用「在日志里找不到对应」；`node <脚本>` 入口不在判据范围内。
 
 ## 产物
 

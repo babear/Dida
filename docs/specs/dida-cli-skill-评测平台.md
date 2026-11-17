@@ -219,7 +219,7 @@ skill-tests/
 - `task complete-batch` 的 `--project` 是**可选**参数，省略时写进收集箱，因此缺省必须拒绝。
 - 拒绝时输出与真 CLI 同构的 API 错误文本与退出码 1，不暴露测试机制。
 - 测试清单集合在生成沙箱时烘焙进沙箱配置，**不从环境变量读**：被测 agent 能读能改进程环境，从 env 读白名单等于把判定权交给它。
-- **沙箱只有 `work/` 是 agent 的 cwd**（#16）：`work/` 里只放 `materials/`；shim 在 `shim/`、skill 与 settings 在 `config/`、工具面定义在 `agents.json`，都在 `work/` 的上一层。实测 agent 在 cwd 里看到 `bin/` 与 `.claude/` 就会去翻，看不到就不会。挪出去不是安全边界（agent 有 `PowerShell`，绝对路径仍读得到），而是去掉无意看到这条路径。
+- **沙箱只有 `work/` 是 agent 的 cwd**（#16）：`work/` 里只放 `materials/`；shim 在 `shim/`、skill 与 settings 在 `config/`、工具面定义在 `agents.json`，都在 `work/` 的上一层。实测 agent 在 cwd 里看到 `bin/` 与 `.claude/` 就会去翻（`Get-ChildItem -Force -Recurse materials, .claude, bin`）；挪出去之后同样的命令只列到 `materials/`。挪出去不是安全边界（agent 有 `PowerShell`，绝对路径仍读得到），而是去掉无意看到这条路径。
 - 试过给 shim 与白名单加 Windows ACL deny 并做会话前后指纹比对，已撤掉：实测 `icacls <file> /remove:d <user>` 一行就能解除，防不住有意绕过，却带来锁死沙箱的风险。真正的文件系统边界与 #3 的执行模型问题同源。
 
 ### 测试清单

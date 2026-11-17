@@ -12,6 +12,7 @@ import {
   hasCleanupProblem,
   previousRunOf,
   probeAssertNotice,
+  sessionEnvOf,
   probesLeftoverLines,
   retainedSummaryLines,
   stateLine,
@@ -638,4 +639,29 @@ test('预设失败的 run 收尾之后不再重复进跑前清场', (t) => {
     JSON.stringify({ ...manifest, cleanupAfter: { deleted: [], failed: [], remaining: [], mismatched: [] } }),
   );
   assert.equal(previousRunOf(root, 'p1'), null);
+});
+
+// #16 的核心接线：会话必须以 work/ 为 cwd，且 PATH 里前置的是 shim/。
+// 这两条是这次改动唯一的实际效果，之前没有任何测试碰得到——把 cwd 改回
+// sandbox.root 会让 agent 重新看到 shim 与配置，而测试仍然全绿。
+test('sessionEnvOf：PATH 前置 shim、CLAUDE_CONFIG_DIR 指向 config', () => {
+  const sandbox = {
+    binDir: 'C:\run-x\shim',
+    configDir: 'C:\run-x\config',
+  };
+  const env = sessionEnvOf({ sandbox, callLogPath: 'C:\logs\calls.ndjson', createdFile: 'C:\logs\created.ndjson' });
+
+  const pathKey = Object.keys(env).find((k) => k.toUpperCase() === 'PATH');
+  assert.ok(env[pathKey].startsWith('C:\run-x\shim'), 'PATH 必须以 shim/ 开头');
+  assert.equal(env.CLAUDE_CONFIG_DIR, 'C:\run-x\config');
+  assert.equal(env.DIDA_CALL_LOG, 'C:\logs\calls.ndjson');
+  assert.equal(env.DIDA_CREATED_FILE, 'C:\logs\created.ndjson');
+});
+
+// cwd 必须是 work/ 而不是整个沙箱——这是 #16 改动的全部意义。
+// 直接读源码断言这条耦合：runOneSession 若改回 sandbox.root，这条会红。
+test('会话以 work/ 为 cwd，而不是整个沙箱', () => {
+  const source = fs.readFileSync(path.join(import.meta.dirname, 'run.mjs'), 'utf8');
+  assert.match(source, /cwd: sandbox\.workDir/, 'cwd 必须是 sandbox.workDir');
+  assert.doesNotMatch(source, /cwd: sandbox\.root/, 'cwd 不该是 sandbox.root：那会让 agent 看到 shim 与配置');
 });

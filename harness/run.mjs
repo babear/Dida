@@ -237,6 +237,29 @@ export function verdictLines(assertion) {
   return lines;
 }
 
+// 会话进程的启动参数。cwd 取 work/ 而不是整个沙箱——shim、配置、工具面定义都在
+// 它的上一层，agent 列目录只看得到 materials/（#16）。这条装配关系是本改动的
+// 全部意义所在：它若改回 sandbox.root，agent 就重新看得到 shim 与配置。
+export function sessionEnvOf({ sandbox, callLogPath, createdFile }) {
+  // Windows 继承来的键名大小写不定（可能是 `Path`），直接写 `env.PATH` 会新增一个同名
+  // 不同大小写的键，spawn 时后者胜出、继承的 PATH 整个丢掉：沙箱里裸 node 就找不到了。
+  // 必须复用已有的那个键。见 #36。
+  const env = withPrependedPath(
+    { ...sanitizeEnv(process.env), CLAUDE_CONFIG_DIR: sandbox.configDir },
+    sandbox.binDir,
+  );
+  // shim 靠这两个环境变量定位本 run 的账本。测试清单集合不走环境变量：
+  // 被测 agent 能读也能改进程环境，白名单必须烘焙在沙箱配置里。
+  env.DIDA_CALL_LOG = callLogPath;
+  env.DIDA_CREATED_FILE = createdFile;
+  return env;
+}
+
+export async function runOneSession({ argv, sandbox, callLogPath, createdFile, transcriptPath }) {
+  const env = sessionEnvOf({ sandbox, callLogPath, createdFile });
+  return runSession({ argv, cwd: sandbox.workDir, env, transcriptPath });
+}
+
 async function runOne(options, scenario, projects, assertionFn) {
   const id = scenario.id;
   const runKey = runId();
@@ -292,20 +315,9 @@ async function runOne(options, scenario, projects, assertionFn) {
     agentsPath: sandbox.agentsPath,
   });
 
-  // Windows 继承来的键名大小写不定（可能是 `Path`），直接写 `env.PATH` 会新增一个同名
-  // 不同大小写的键，spawn 时后者胜出、继承的 PATH 整个丢掉：沙箱里裸 node 就找不到了。
-  // 必须复用已有的那个键。见 #36。
-  const env = withPrependedPath(
-    { ...sanitizeEnv(process.env), CLAUDE_CONFIG_DIR: sandbox.configDir },
-    sandbox.binDir,
-  );
-  // shim 靠这两个环境变量定位本 run 的账本。测试清单集合不走环境变量：
-  // 被测 agent 能读也能改进程环境，白名单必须烘焙在沙箱配置里。
-  env.DIDA_CALL_LOG = callLogPath;
-  env.DIDA_CREATED_FILE = createdFile;
-  // cwd 是 work/ 而不是整个沙箱：shim、配置、工具面定义都在它的上一层，
-  // agent 列目录只看得到 materials/。见 sandbox.mjs 的 createSandbox。
-  const session = await runSession({ argv, cwd: sandbox.workDir, env, transcriptPath });
+  const session = await runOneSession({
+    argv, sandbox, callLogPath, createdFile, transcriptPath,
+  });
 
   const events = parseTranscript(transcriptPath);
   const summary = summarizeTranscript(events);
@@ -362,7 +374,7 @@ async function runOne(options, scenario, projects, assertionFn) {
 
   const manifest = {
     run: runKey,
-    scenario: scenario.id,
+    scenario: id,
     kind: scenario.kind,
     // 探针目录里的 assert.mjs 不执行，报告要据此留一行提示（ADR-0015）。
     unusedAssert: scenario.kind === 'probe' && scenario.hasAssert,
@@ -681,13 +693,16 @@ async function main() {
     const finalManifest = { ...manifest, cleanup, sandboxRetained: retained };
     writeManifest(runDir, finalManifest);
     writeReport(runDir, finalManifest);
+    // 删除失败要让后面三处都说实话：manifest 的 sandboxRetained、报告的「沙箱已删除」、
+    // 控制台的 (removed)。吞掉异常却仍报 removed，读报告的人会以为盘上没有残留。
+    let deleteError = null;
     if (!retained) {
       try {
         fs.rmSync(sandbox.root, { recursive: true, force: true });
       } catch (error) {
-        // 删不掉的沙箱会在 %TEMP% 里堆着。到这一步已经不指望能删，
-        // 只把位置说清楚，让人手工处理。
-        console.error(`    沙箱删除失败（${error.code ?? error.message}）：${sandbox.root}`);
+        deleteError = error.code ?? error.message;
+        console.error(`    沙箱删除失败（${deleteError}）：${sandbox.root}`);
+        writeManifest(runDir, { ...finalManifest, sandboxRetained: true, sandboxDeleteError: deleteError });
       }
     }
     if (defer) retainedRuns.push({ run, scenario: id, status: manifest.assertion.status });
@@ -701,7 +716,7 @@ async function main() {
     //   探针：只有 sampled 是 0。incomplete / invalid 说明这份样本不能用，
     //        1 就是在告诉脚本「别拿它写断言」。
     const ok = manifest.assertion.status === (scenario.kind === 'probe' ? 'sampled' : 'passed');
-    if (!completed || cleanupProblem || !ok) failures += 1;
+    if (!completed || cleanupProblem || !ok || deleteError) failures += 1;
 
     const verdict = scenario.kind === 'probe'
       ? { sampled: 'SAMPLED', incomplete: 'INCOMPLETE', invalid: 'INVALID' }[manifest.assertion.status]
@@ -715,7 +730,7 @@ async function main() {
     console.log(`${verdict} ${id}  run=${run}`);
     console.log(`  skill sha256=${manifest.skill.sha256.slice(0, 16)} files=${manifest.skill.files} git=${manifest.skill.git.rev?.slice(0, 12)}${manifest.skill.git.dirty ? ' (dirty)' : ''}`);
     console.log(`  model alias=${manifest.model.requested_alias} provider=${manifest.model.provider}（别名不等于实际执行模型，真实映射见 manifest.model.alias_mapping）`);
-    console.log(`  sandbox=${sandbox.root}${retained ? ' (retained)' : ' (removed)'}`);
+    console.log(`  sandbox=${sandbox.root}${retained || deleteError ? ' (retained)' : ' (removed)'}`);
     console.log(`  transcript=${path.relative(repoRoot, manifest.transcript.path)} events=${manifest.transcript.events} toolCalls=${manifest.transcript.toolCalls}`);
     console.log(`  calls=${path.relative(repoRoot, manifest.calls.path)} total=${manifest.calls.total} rejected=${manifest.calls.rejected} outOfBounds=${manifest.calls.outOfBounds}`);
     console.log(`  created=${manifest.created.length} 条${manifest.created.length ? '：' + manifest.created.map((e) => e.id).join('、') : ''}`);

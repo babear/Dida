@@ -129,7 +129,7 @@ function sandboxFixture(t) {
   return { dir, skillPath, agentsSourcePath, settingsPath, runId };
 }
 
-test('createSandbox 的落点与 sandboxRootOf 一致：异常路径靠它找回沙箱解锁', (t) => {
+test('createSandbox 的落点与 sandboxRootOf 一致', (t) => {
   const { skillPath, agentsSourcePath, settingsPath, runId } = sandboxFixture(t);
   const sandbox = createSandbox({
     runId,
