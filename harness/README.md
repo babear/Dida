@@ -13,12 +13,12 @@ npm run test:harness  # harness 自己的单元测试，不烧 API
 
 | 参数 | 默认 | 作用 |
 |---|---|---|
-| `--scenario <id>` | 全部 | 只跑 `skill-tests/scenarios/<id>/` 这一条 |
+| `--scenario <id>` | 全部 | 只跑 `skill-tests/scenarios/<id>/` 这一条；id 也可命中 `probes/<id>/`（同名时正式用例优先） |
 | `--skill-path <dir>` | `skills/dida-cli` | 要复制进沙箱的 skill 目录 |
 | `--settings <file>` | `~/.claude/settings.json` | 取 `ANTHROPIC_*` 键的来源 |
 | `--keep-sandbox` | 关 | 成功时也保留沙箱（失败时总是保留）。只管沙箱，不影响清场 |
 | `--hold` | 关 | 跑完不清场，留现场给人看；之后用 `--clean <runId>` 收尾 |
-| `--clean <runId>` | — | 只按该 run 的 `created.ndjson` 删除任务，然后退出 |
+| `--clean <runId>` | — | 只按该 run 的 `created.ndjson` 删除任务，然后退出。**不改写 `report.md`，也不覆盖 `manifest.cleanup`**——那份报告与当时的结论是那次运行的产物，收尾只把结果记到 `manifest.cleanupAfter` |
 
 退出码：任一 scenario 断言未通过、会话非零退出或超时、用例配置错误（缺 `assert.mjs`，或断言模块加载失败、没给出合法结果）、可信度检查不过（日志条数与轨迹对不上，或轨迹读不出）、终态快照取不到、清场中止或删除失败，都是 1。
 
@@ -56,7 +56,7 @@ npm run test:harness  # harness 自己的单元测试，不烧 API
 
 加一条 scenario 就是加一个目录，harness 一行不用改（前提是 `assert.mjs` 与 `preset.mjs` 已实现）。目录形态与三面判定的完整理由见 ADR-0012。
 
-**`scenario.json`、`materials/` 与 `assert.mjs` 现在能跑。** `preset.mjs` 归 #19，探针归 #20。在那之前，目录里放 `preset.mjs` 不会被执行。
+**`scenario.json`、`materials/` 与 `assert.mjs` 现在能跑。** `preset.mjs` 归 #19。在那之前，目录里放 `preset.mjs` 不会被执行。
 
 `preset.mjs` 建前置数据时从 harness 拿到**本次 run 的清单**，不是仓库里的默认常量——用默认常量会在环境变量覆盖时建到清场的视野外，成为删不掉的孤儿。校验规则见 ADR-0012：目标清单必须 ∈ 本次清单集合；指向已有任务的参数（`--parent-id`、`task update --id` 等）与 `--help` 这类空操作一律拒绝。它建出的任务立刻记进本 run 的账本，和 shim 记的是同一份。
 
@@ -64,7 +64,27 @@ npm run test:harness  # harness 自己的单元测试，不烧 API
 
 **`scenarios/<id>/` 缺 `assert.mjs` 时报错退出，不跑会话。** 跳过会让漏写或误删断言的用例静默退出回归网、退出码仍是 0。报告里单列「用例配置错误」，与「断言未通过」区分——一个去补用例，一个去改 skill。没写完的用例放 `probes/`。
 
-没有 `assert.mjs` 的目录放在 `skill-tests/probes/<id>/` 下，是探针：跑一次拿事实样本，写断言，然后删掉。探针不参与全量判定。
+### 探针
+
+`skill-tests/probes/<id>/` 是探针。它与 scenario **共用**沙箱、会话、账本、调用日志、会话门与可信度检查，**分岔在取到终态快照之后**：探针到此结束，不跑结局断言与过程断言，也永不清场（见 ADR-0015）。
+
+| 维度 | scenario | 探针 |
+|---|---|---|
+| 会话门 / 可信度检查 | 都要过 | 都要过 |
+| 取终态快照 | 取 | 取，到此为止 |
+| 结局断言、过程断言 | 跑 | 不跑 |
+| 结论 | `passed` / `failed` / `broken` / `invalid` / `incomplete` | `sampled` / `invalid` / `incomplete` |
+| 清场 | 只有 `passed` 才清 | **永不**，收尾用 `--clean <runId>` |
+| manifest | `kind: 'scenario'` | `kind: 'probe'` |
+
+- 退出码只反映「这份样本可不可用」：`sampled` 为 0，其余为 1。
+- 探针的空样本（agent 一条任务都没建、`state.json` 落 `[]`）仍是 `sampled`——那正是要写进断言的事实。
+- `probes/<id>/` 里的 `assert.mjs` 不执行，控制台与报告各留一行提示。
+- 探针可以带 `preset.mjs`，校验规则与账本归属同 scenario。
+- 全量运行只扫 `scenarios/`，不碰 `probes/`；跑完时 `probes/` 非空会在汇总末尾提醒清理。
+- 同名时正式用例优先：`scenarios/<id>` 赢过 `probes/<id>`。
+- **跑前清场**：开跑某条用例之前，若它上一次的 run 没清场，先按那份账本清一遍。探针不清场是设计，留下的任务会让下一次运行的 agent 看到同名任务就不再新建，取样直接失真（2026-11-17 实际发生过）。
+- **报告标题行标明身份**：`# 探针 <id> · <run>` 与 `# scenario <id> · <run>`，不用翻 manifest 就能分清。
 
 `listScenarios` 只扫 `skill-tests/scenarios/`，仓库根的旧 `scenarios/` 已不再读取。
 

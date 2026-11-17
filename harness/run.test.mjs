@@ -8,7 +8,11 @@ import {
   cleanupGate,
   credibilityOf,
   deferredCleanupLine,
+  finishRun,
   hasCleanupProblem,
+  previousRunOf,
+  probeAssertNotice,
+  probesLeftoverLines,
   retainedSummaryLines,
   stateLine,
   takeState,
@@ -287,6 +291,15 @@ test('--keep-sandbox 不阻止清场：它只管沙箱，清场看的是 --hold 
   assert.equal(cleanupGate({ status: 'passed', hold: false }), false);
 });
 
+// 探针永不清场（ADR-0015）：它的全部价值就是现场——任务、沙箱、state.json
+// 都要留着供人打开客户端对着写断言。这条不能靠「探针结论不是 passed」这种
+// 巧合成立：将来探针若多一个新结论词，清场就会悄悄漏进来。
+test('探针无论结论如何都不清场', () => {
+  for (const status of ['sampled', 'incomplete', 'invalid']) {
+    assert.equal(cleanupGate({ status, hold: false, kind: 'probe' }), true, `探针 ${status} 不该清场`);
+  }
+});
+
 test('保留现场时控制台写「现场已保留，用 --clean <runId> 收尾」', () => {
   const line = deferredCleanupLine('2026-11-16T09-00-00-000Z-ab12cd');
   assert.match(line, /现场已保留/);
@@ -342,4 +355,186 @@ test('前置不改动传入的对象', () => {
   const source = { Path: 'C:\\Windows' };
   withPrependedPath(source, 'C:\\bin');
   assert.deepEqual(source, { Path: 'C:\\Windows' });
+});
+
+// 全量运行不碰 probes/（ADR-0015）：探针不计入回归网。但 probes/ 里有残留
+// 说明流程没走完——「断言写好了却没搬走」会让回归网静默少一条。
+test('probes/ 为空时不写提醒', () => {
+  assert.deepEqual(probesLeftoverLines([]), []);
+});
+
+test('probes/ 非空时汇总末尾提醒清理', () => {
+  const text = probesLeftoverLines(['checklist-desc-field', 'another-probe']).join('\n');
+  assert.match(text, /2 条探针/);
+  assert.match(text, /checklist-desc-field/);
+  assert.match(text, /another-probe/);
+  assert.match(text, /scenarios/);
+});
+
+test('提醒不冒充失败：它说的是流程没走完，不是哪条用例没通过', () => {
+  const text = probesLeftoverLines(['p1']).join('\n');
+  assert.doesNotMatch(text, /FAILED/);
+  assert.doesNotMatch(text, /未通过/);
+});
+
+// 探针目录里的 assert.mjs 不执行（ADR-0012）。但静默忽略会让「写了断言却没结论」
+// 变成一次无声的困惑——排查的人会先怀疑 harness。
+test('探针里放了 assert.mjs 时给出提示，说明它未被使用', () => {
+  const line = probeAssertNotice({ id: 'p1', kind: 'probe', dir: 'skill-tests/probes/p1', hasAssert: true });
+  assert.match(line, /assert\.mjs/);
+  assert.match(line, /未被使用/);
+  assert.match(line, /scenarios/);
+});
+
+test('探针没有 assert.mjs 时不提示', () => {
+  assert.equal(probeAssertNotice({ id: 'p1', kind: 'probe', dir: 'skill-tests/probes/p1', hasAssert: false }), null);
+});
+
+test('正式用例带了 assert.mjs 不触发探针提示', () => {
+  assert.equal(probeAssertNotice({ id: 's1', dir: 'x', kind: 'scenario', hasAssert: true }), null);
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// 事后收尾（问题 2）：--clean 是操作者的收尾动作，不是那次运行的产物。
+// report.md 一旦落盘就是历史事实，收尾只能更新 manifest 里的记录。
+// 之前的实现会按新 manifest 重画整份报告——探针的「未清场」于是变成
+// 「按账本删除 1 条」，读报告的人会以为探针自己清了场。
+// ─────────────────────────────────────────────────────────────────────────
+
+test('收尾只更新 manifest，report.md 逐字不变', (t) => {
+  const root = tmpRepo(t);
+  const runDir = path.join(root, 'runs', 'r1');
+  fs.mkdirSync(runDir, { recursive: true });
+  const reportPath = path.join(runDir, 'report.md');
+  const ORIGINAL = '# 探针 p1 · r1\n\n## 取样\n\n**已取样**\n';
+  fs.writeFileSync(reportPath, ORIGINAL);
+  fs.writeFileSync(path.join(runDir, 'created.ndjson'), '');
+  writeManifest(runDir, { run: 'r1', scenario: 'p1', kind: 'probe', cleanup: { deferred: true } });
+
+  const cleanup = finishRun({
+    runDir,
+    projects: [],
+    dida: { run: () => ({ stdout: '[]', stderr: '', exitCode: 0 }) },
+  });
+
+  assert.equal(fs.readFileSync(reportPath, 'utf8'), ORIGINAL, '报告是那次运行的产物，收尾不该改它');
+  assert.deepEqual(cleanup.deleted, []);
+  const manifest = JSON.parse(fs.readFileSync(path.join(runDir, 'manifest.json'), 'utf8'));
+  // 那次运行的事实原样保留：收尾不能改写「当时没清场」这个结论。
+  assert.equal(manifest.cleanup.deferred, true, '运行时的 cleanup 是历史事实，收尾不该覆盖它');
+  assert.equal(manifest.kind, 'probe', '其余字段原样保留');
+  // 收尾自己的结果另记一处。
+  assert.deepEqual(manifest.cleanupAfter, cleanup);
+});
+
+test('收尾记录清场结果供人查', (t) => {
+  const root = tmpRepo(t);
+  const runDir = path.join(root, 'runs', 'r1');
+  fs.mkdirSync(runDir, { recursive: true });
+  fs.writeFileSync(path.join(runDir, 'report.md'), '原始报告');
+  fs.writeFileSync(
+    path.join(runDir, 'created.ndjson'),
+    `${JSON.stringify({ id: 'a', projectId: 'p1', title: 't' })}\n`,
+  );
+  writeManifest(runDir, { run: 'r1', scenario: 's1', kind: 'scenario' });
+
+  const cleanup = finishRun({
+    runDir,
+    projects: ['p1'],
+    dida: {
+      run: (argv) => {
+        if (argv[0] === 'task' && argv[1] === 'filter') {
+          return { stdout: JSON.stringify([{ id: 'a' }]), stderr: '', exitCode: 0 };
+        }
+        if (argv[0] === 'task' && argv[1] === 'delete') return { stdout: '', stderr: '', exitCode: 0 };
+        return { stdout: '[]', stderr: '', exitCode: 0 };
+      },
+    },
+  });
+
+  assert.deepEqual(cleanup.deleted, ['a']);
+  assert.equal(fs.readFileSync(path.join(runDir, 'report.md'), 'utf8'), '原始报告');
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// 跑前清场（问题 3）：探针不清场是设计，代价是同一条用例重跑时
+// 上一次留下的任务还在清单里——agent 看到同名任务就不再新建，
+// 取样直接失真（2026-11-17 实际发生过：created=0，agent 只是查了旧任务）。
+//
+// 所以跑某条用例之前，按该用例**上一次**的 run 账本清一遍。
+// 只清同 id 的那一条，不碰别的用例的现场。
+// ─────────────────────────────────────────────────────────────────────────
+
+function writeRun(root, runKey, { scenario, kind = 'scenario', deferred = true }) {
+  const runDir = path.join(root, 'runs', runKey);
+  fs.mkdirSync(runDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(runDir, 'manifest.json'),
+    JSON.stringify({
+      run: runKey, scenario, kind, testProjects: [],
+      cleanup: deferred ? { deferred: true } : { deleted: [], failed: [], remaining: [], mismatched: [] },
+    }),
+  );
+  fs.writeFileSync(path.join(runDir, 'report.md'), `报告 ${runKey}`);
+  return runDir;
+}
+
+test('跑前清场找到同一条用例上一次的 run', (t) => {
+  const root = tmpRepo(t);
+  writeRun(root, '2026-11-17T01-00-00-000Z-aaaaaa', { scenario: 'p1' });
+  writeRun(root, '2026-11-17T02-00-00-000Z-bbbbbb', { scenario: 'p1' });
+  writeRun(root, '2026-11-17T03-00-00-000Z-cccccc', { scenario: 'other' });
+
+  const found = previousRunOf(root, 'p1');
+  assert.equal(path.basename(found.runDir), '2026-11-17T02-00-00-000Z-bbbbbb', '取时间最新的那一条');
+  assert.equal(found.scenario, 'p1');
+});
+
+test('没有历史 run 时跑前清场什么都不做', (t) => {
+  assert.equal(previousRunOf(tmpRepo(t), 'never-run'), null);
+});
+
+test('跑前清场不碰别的用例的 run', (t) => {
+  const root = tmpRepo(t);
+  writeRun(root, 'r-other', { scenario: 'other' });
+  assert.equal(previousRunOf(root, 'p1'), null);
+});
+
+// 已清过场的 run 不该被再清一次：账本是唯一依据，但重复清场会报 deleted 数，
+// 让人以为又删了东西。按 manifest 判它清没清过。
+test('已经清过场的 run 不再进跑前清场', (t) => {
+  const root = tmpRepo(t);
+  writeRun(root, 'r-done', { scenario: 'p1', deferred: false });
+  writeRun(root, 'r-pending', { scenario: 'p1', deferred: true });
+  assert.equal(path.basename(previousRunOf(root, 'p1').runDir), 'r-pending');
+});
+
+test('同一条用例最近的 run 已清场时，不回头去清更早的那条', (t) => {
+  const root = tmpRepo(t);
+  writeRun(root, '2026-11-17T01-00-00-000Z-old', { scenario: 'p1', deferred: true });
+  writeRun(root, '2026-11-17T02-00-00-000Z-new', { scenario: 'p1', deferred: false });
+  assert.equal(previousRunOf(root, 'p1'), null, '只认最近的那条：更早的现场可能已被人看过、留作证据');
+});
+
+test('runs/ 不存在时跑前清场不报错', (t) => {
+  assert.equal(previousRunOf(tmpRepo(t), 'p1'), null);
+});
+
+// 收尾之后 cleanup 仍是 deferred（历史事实），所以「清过没有」只能看 cleanupAfter。
+// 只看 cleanup 会让每跑一次都重清一遍——同一批任务被反复报「删掉 N 条」。
+test('收尾过的 run 不再被跑前清场选中，尽管 cleanup.deferred 仍为真', (t) => {
+  const root = tmpRepo(t);
+  const runDir = writeRun(root, '2026-11-17T01-00-00-000Z-done', { scenario: 'p1' });
+  const manifest = JSON.parse(fs.readFileSync(path.join(runDir, 'manifest.json'), 'utf8'));
+  fs.writeFileSync(
+    path.join(runDir, 'manifest.json'),
+    JSON.stringify({ ...manifest, cleanupAfter: { deleted: [], failed: [], remaining: [], mismatched: [] } }),
+  );
+
+  assert.equal(previousRunOf(root, 'p1'), null);
+  assert.equal(
+    JSON.parse(fs.readFileSync(path.join(runDir, 'manifest.json'), 'utf8')).cleanup.deferred,
+    true,
+    '运行时的结论不能被收尾抹掉',
+  );
 });

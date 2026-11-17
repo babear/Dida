@@ -54,34 +54,27 @@ export async function runAssert(assertionFn, input) {
   };
 }
 
-// 一条 scenario 的结局判定，五个状态见 ADR-0012（三面拆分）与本 ADR-0014（前置门与顺序）：
-// incomplete（前置门：会话没正常结束）、invalid（结果不可用，看 cause 决定重跑还是查代码）、
-// broken（用例有缺陷）、failed（skill 没做到）、passed。
-//
-// 会话正常结束是判定链的前置门，不属于三面（ADR-0014）：没正常结束时判定链根本没开始，
-// 不取快照、不跑断言，也就没有可信度检查可言——一次「会话没跑完」的运行没有产出可判的事实。
-//
-// 可信度检查同理：它不过，说明这次运行的事实基础不成立，后面各面算出来的东西没有参考价值
-// （判据至今只比条数，#18）。所以只返回第一面的结论，不取快照、不调断言模块——
-// 一次运行只给一个结论。
-//
-// 快照在结局断言这一刻取，不在会话结束时取（ADR-0014）：它的唯一消费者是结局断言，
-// 前面两面都过了才轮得到它。取不到是基础设施故障，判 invalid（cause: state）并停住，
-// 不拿 [] 去跑断言——那组结论只会把人引向错误的方向。
-//
-// 返回值里的 snapshot 是**这次判定实际用的快照**，调用方据此落 manifest 与报告，
-// 不必也不该自己再取一次：「没取」与「取了」的事实只有判定链知道。
-export async function decideAssertion({
-  completed, crossCheck, takeSnapshot, assertionFn, input,
-}) {
-  if (!completed) return { status: 'incomplete', results: [], snapshot: notTaken() };
+// 快照的三种状态：没取（判定链在前一面就停了）、取了但失败、取到了。
+// `state` 为空数组只对后两种成立——「没取」也落 []，但调用方靠 status 分辨。
+function notTaken() {
+  return { status: 'not-taken', state: [], error: null };
+}
+
+// 两条路径共享的前三步（ADR-0015）：会话门 → 可信度检查 → 取快照。
+// 探针走完它就直接用这个结果作结论——`sampled` 就是「前两步都过了、快照取到了」；
+// scenario 则拿它继续跑结局断言。所以这里只产出**事实**，不产出任何判定：
+// `sampled` 不是 `passed`，它只说明这份样本可用，不说明 skill 是对的。
+export function takeSample({ completed, crossCheck, takeSnapshot }) {
+  if (!completed) {
+    return { status: 'incomplete', results: [], snapshot: notTaken() };
+  }
 
   const crossFailure = crossCheckFailure(crossCheck);
   if (crossFailure) return { ...crossFailure, snapshot: notTaken() };
 
   const snapshot = takeSnapshot();
   // 只认 'ok'：takeState 现在只产 ok / failed，但这里按「不是 ok 就停」写，
-  // 多一个状态（比如将来某种取不到）也不会带着空清单滑进断言。
+  // 多一个状态（比如将来某种取不到）也不会带着空清单滑进下游。
   if (snapshot.status !== 'ok') {
     return {
       status: 'invalid',
@@ -92,12 +85,19 @@ export async function decideAssertion({
     };
   }
 
-  return { ...(await runOutcome(assertionFn, { ...input, tasks: snapshot.state })), snapshot };
+  return { status: 'sampled', results: [], snapshot };
 }
 
-// 「没取」：没有 state.json，清单条数无意义（null）。
-function notTaken() {
-  return { status: 'not-taken', state: [], error: null };
+// 一条 scenario 的结局判定：拿一份已经取好的快照跑断言。
+// 会话门与可信度检查已由 takeSample 做完（ADR-0015）——这里不再自己判一遍，
+// 两处各判一次就会出现「共享段说没取、这里说取了」的分叉。
+export async function decideAssertion({ sample, assertionFn, input }) {
+  // 缺 sample 是调用方接错了线（旧签名传的是 completed / takeSnapshot）。
+  // 静默返回一个没结论的对象会让它一路滑到报告里，那里只会显示「未评断言」。
+  if (!sample) throw new Error('decideAssertion 需要 sample：先调 takeSample');
+  if (sample.status !== 'sampled') return sample;
+
+  return { ...(await runOutcome(assertionFn, { ...input, tasks: sample.snapshot.state })), snapshot: sample.snapshot };
 }
 
 // 可信度失败时的结论；通过时返回 null。

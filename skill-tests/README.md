@@ -2,12 +2,12 @@
 
 被测 skill 的测试用例数据。机器在 `harness/`，这里只有数据。
 
-> **这份文档里 `assert.mjs` 与 `state.json` 已经实现，`preset.mjs` 与探针还没有。** 现在 `scenario.json`、`materials/`、`assert.mjs` 都能跑：缺 `assert.mjs` 的用例会被判「用例配置错误」并直接退出、不开会话。`preset.mjs` 归 #19，探针（`probes/` 目录）与 `--scenario` 跑探针归 #20，过程断言归 #8。
+> **这份文档里 `assert.mjs` 与 `state.json` 已经实现，`preset.mjs` 还没有。** 现在 `scenario.json`、`materials/`、`assert.mjs` 都能跑：缺 `assert.mjs` 的用例会被判「用例配置错误」并直接退出、不开会话。`preset.mjs` 归 #19，探针的设计见 ADR-0015，过程断言归 #8。
 
 ```
 skill-tests/
 ├── scenarios/<id>/     # 正式用例，参与全量判定
-├── probes/<id>/        # 探针，跑完即删
+├── probes/<id>/        # 探针，取到快照即止、不清场，断言写好后搬进 scenarios/
 └── README.md
 ```
 
@@ -73,16 +73,20 @@ export default (projects) => [
 ### 3. 跑探针
 
 ```bash
-node harness/run.mjs --scenario <id>   # #20 落地前，探针还只能放在 scenarios/ 里跑
+node harness/run.mjs --scenario <id>
 ```
+
+探针与 scenario 共用沙箱、会话、账本与可信度检查，分岔在取到终态快照之后：探针到此结束，不跑断言、也不清场（ADR-0015）。所以一次探针成功跑完的结论是 `sampled` 而不是 `passed`，退出码 0 只代表「这份样本可用」。
 
 读完 `runs/<runId>/` 下的三件事实：
 
 | 文件 | 看什么 |
 |---|---|
-| `state.json` | 账本里每条任务的完整现状。按测试清单枚举定位，枚举不到才回退账本的 `projectId`。断言读的就是它。**探针是独立流程、不参与判定，因此不受判定链与清场门控约束**；而一次正式用例的可信度检查不过时不会产出这个文件 |
+| `state.json` | 账本里每条任务的完整现状。按测试清单枚举定位，枚举不到才回退账本的 `projectId`。断言读的就是它。探针也产出它，取到即止 |
 | `calls.ndjson` | 被测 agent 实际调了哪些 dida 命令，argv 是解析后的数组 |
 | `trace.ndjson` | agent 的完整步骤。只在需要看它为什么这么做时读 |
+
+探针永不清场，任务与沙箱都留在现场；确认完用 `--clean <runId>` 收尾。
 
 ### 4. 据此写 `assert.mjs`
 
@@ -113,7 +117,7 @@ export default function assert({ tasks, created, calls, session }) {
 git mv skill-tests/probes/<id> skill-tests/scenarios/<id>
 ```
 
-探针跑完就删。`probes/` 里还留着东西说明流程没走完。
+探针的源目录跑完就删，运行现场按需用 `--clean` 收尾。`probes/` 里还留着源目录说明流程没走完，全量运行的汇总末尾会提醒。
 
 ### 6. 验证红绿
 

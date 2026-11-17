@@ -278,3 +278,136 @@ test('旧 manifest 的 skipped（incomplete 的旧名）保留现场理由与 in
   assert.match(text, /会话没正常结束/);
   assert.doesNotMatch(text, /没有自动清场/);
 });
+
+// ─────────────────────────────────────────────────────────────────────────
+// 探针的报告（ADR-0015）：标题是「## 取样」而不是「## 判定」，
+// 因为探针不判断言——用「判定」会让人以为 skill 被评过。
+// ─────────────────────────────────────────────────────────────────────────
+
+function probeManifest(overrides = {}) {
+  return {
+    ...MANIFEST,
+    kind: 'probe',
+    assertion: { status: 'sampled', results: [] },
+    cleanup: { deferred: true },
+    calls: {
+      path: 'runs/x/calls.ndjson',
+      total: 12,
+      crossCheck: { status: 'consistent', calls: 12, shapeCalls: 12 },
+    },
+    ...overrides,
+  };
+}
+
+test('探针报告用「## 取样」作标题，不出现「## 判定」', () => {
+  const report = renderReport(probeManifest());
+  assert.match(report, /## 取样/);
+  assert.doesNotMatch(report, /## 判定/);
+});
+
+test('探针报告写明结论是「已取样」，不冒充通过', () => {
+  const report = renderReport(probeManifest());
+  assert.match(report, /已取样/);
+  assert.doesNotMatch(report, /结局断言 通过/, '「通过」是 judgement 的词，探针没有判定');
+  assert.doesNotMatch(report, /未通过/);
+});
+
+test('探针报告带可信度检查的两个条数——写断言的人靠它自查样本可靠性', () => {
+  const report = renderReport(probeManifest());
+  assert.match(report, /12 条 dida 调用/);
+  assert.match(report, /12 次 PowerShell/);
+});
+
+test('探针报告写「未清场」并说明是探针保留现场', () => {
+  const report = renderReport(probeManifest());
+  assert.match(report, /未清场/);
+  assert.match(report, /探针/);
+  assert.match(report, /写断言/);
+});
+
+test('探针的空样本明说「本次没有创建任何任务」', () => {
+  const report = renderReport(probeManifest({ created: [] }));
+  assert.match(report, /没有创建任何任务/);
+});
+
+test('探针的 incomplete 沿用同一个词，不写成「跳过」', () => {
+  const report = renderReport(probeManifest({
+    assertion: { status: 'incomplete', results: [] },
+  }));
+  assert.match(report, /会话没正常结束/);
+  assert.doesNotMatch(report, /跳过/);
+});
+
+test('探针的 invalid 带 cause 时用 scenario 同款的标题', () => {
+  const report = renderReport(probeManifest({
+    assertion: {
+      status: 'invalid',
+      cause: 'cross-check',
+      detail: '调用日志与轨迹对不上：3 条 dida 调用 / 4 次 PowerShell',
+      results: [{ ok: false, name: '可信度检查', expected: 'x', actual: '3 条 dida 调用 / 4 次 PowerShell' }],
+    },
+  }));
+  assert.match(report, /## 取样/);
+  assert.match(report, /结果不可信/);
+  assert.match(report, /3 条 dida 调用/);
+});
+
+test('scenario 的报告仍是「## 判定」，探针分支不串到它', () => {
+  const report = renderReport({ ...MANIFEST, assertion: { status: 'passed', results: [] } });
+  assert.match(report, /## 判定/);
+  assert.doesNotMatch(report, /## 取样/);
+});
+
+test('探针的摘要说「探针 … 跑了一次真实会话」，不冒充 scenario', () => {
+  const text = renderSummary(probeManifest());
+  assert.match(text, /^探针 example-scenario/);
+  assert.doesNotMatch(text, /^scenario/);
+});
+
+test('探针摘要说保留现场供人写断言，不按判定结论编理由', () => {
+  const text = renderSummary(probeManifest());
+  assert.match(text, /保留现场供人查看与写断言/);
+  assert.doesNotMatch(text, /断言未通过/);
+});
+
+// AC：探针里放了 assert.mjs 时，控制台与报告各留一行提示（ADR-0015）。
+test('探针报告提示 assert.mjs 未被使用', () => {
+  const report = renderReport(probeManifest({ unusedAssert: true }));
+  assert.match(report, /未被使用/);
+  assert.match(report, /assert\.mjs/);
+  assert.match(report, /scenarios/);
+});
+
+test('没放 assert.mjs 的探针报告不出现这条提示', () => {
+  const report = renderReport(probeManifest({ unusedAssert: false }));
+  assert.doesNotMatch(report, /未被使用/);
+});
+
+// 报告必须能一眼看出这是探针还是正式用例（问题 1）：
+// 两者的标题与首行原本完全同构，不看 manifest 根本分不出。
+// 只查标题行——正文里本来就散落着「探针」「scenario」字样，查全文等于没查。
+function titleLineOf(manifest) {
+  return renderReport(manifest).split('\n').find((line) => line.startsWith('# '));
+}
+
+test('正式用例的标题行标出「scenario」，且不写「探针」', () => {
+  const title = titleLineOf({ ...MANIFEST, kind: 'scenario', assertion: { status: 'passed', results: [] } });
+  assert.match(title, /scenario/);
+  assert.doesNotMatch(title, /探针/);
+});
+
+test('探针的标题行标出「探针」', () => {
+  assert.match(titleLineOf(probeManifest()), /探针/);
+});
+
+test('探针标识出现在标题行，不用翻到摘要才看得到', () => {
+  const report = renderReport(probeManifest());
+  const titleLine = report.split('\n').find((line) => line.startsWith('# '));
+  assert.match(titleLine, /探针/);
+});
+
+test('正式用例标识同样出现在标题行', () => {
+  const report = renderReport({ ...MANIFEST, kind: 'scenario', assertion: { status: 'passed', results: [] } });
+  const titleLine = report.split('\n').find((line) => line.startsWith('# '));
+  assert.match(titleLine, /scenario/);
+});
