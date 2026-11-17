@@ -20,7 +20,7 @@ npm run test:harness  # harness 自己的单元测试，不烧 API
 | `--hold` | 关 | 跑完不清场，留现场给人看；之后用 `--clean <runId>` 收尾 |
 | `--clean <runId>` | — | 只按该 run 的 `created.ndjson` 删除任务，然后退出 |
 
-退出码：任一 scenario 断言未通过、会话非零退出或超时、用例配置错误（缺 `assert.mjs`，或断言模块加载失败、没给出合法结果）、可信度检查不过（日志条数与轨迹对不上，或轨迹读不出）、终态快照取不到、清场中止或删除失败，都是 1。
+退出码：任一 scenario 断言未通过、会话非零退出或超时、用例配置错误（缺 `assert.mjs`，或断言模块加载失败、没给出合法结果）、可信度检查不过（有 dida 调用没进日志，或轨迹读不出可比的调用）、终态快照取不到、清场中止或删除失败，都是 1。
 
 ### 清场纪律
 
@@ -74,7 +74,7 @@ npm run test:harness  # harness 自己的单元测试，不烧 API
 
 三面按**严格顺序**短路，前一面不过就不算后面，任一面红即非零，报告写明是哪一面。**没有「评估」**——不存在「算了但不计入判定」的结论，报告里只出现第一个红的面（见 ADR-0014）：
 
-1. **可信度检查**：调用日志条数少于轨迹里的命令调用数，可能是调用绕过 shim，也可能是非 dida 的 PowerShell 抬高了分母；轨迹一条可解析事件都没有则无从比对。判据分不清前两种（#18）。两种都标 `invalid` 而非 `fail`——退出码同样非零，但语义是"结果不可用"，不是 skill 有缺陷。**不过即终止，不取快照、不跑断言。**
+1. **可信度检查**：从轨迹里每次 `PowerShell` 调用的命令字符串中抽出 dida 调用，与调用日志的 argv 逐条对；对不上的那几次就是没走过 shim。与 dida 无关的命令（`Get-ChildItem`、`New-Item` 等）不参与判断；轨迹读不出事件、或命令里出现 dida 却解析不出（如 `$cmd = "dida"; & $cmd task create`）则判无从比对。三态：`consistent` / `inconsistent` / `indeterminate`，后两种都标 `invalid` 而非 `fail`——退出码同样非零，但语义是"结果不可用"，不是 skill 有缺陷。**不过即终止，不取快照、不跑断言。**
 2. **取快照 ＋ 结局断言**：读终态快照 `runs/<runId>/state.json`——账本里每个 id 取回的任务现状，取不到的记 `null`。定位与清场同一套：先按测试清单枚举再按 id 找，因为 agent 可能用 `task move` 挪走任务；枚举不到才回退到账本记的 `projectId` 直查。快照在断言这一刻取，不在会话结束时取。
 3. **过程断言**：调用日志 argv 序列上的三条硬规则，见 ADR-0005。第 3 条（越界写入）现由 shim 当场拒绝并记 `rejected`，只需接进判定。
 
@@ -90,7 +90,7 @@ npm run test:harness  # harness 自己的单元测试，不烧 API
 | `MISCONFIGURED` | 缺 `assert.mjs`，不开会话但仍落一份只含判定的报告 | 补用例，或移到 `probes/` |
 | `NOT FOUND` | `--scenario` 写错 id | 改正 id |
 
-过程断言归 #8，可信度检查的判据归 #18。**判据改造必须排在第一条真实 scenario 落地之前**：在严格顺序短路下，一次 `Get-ChildItem` 就能让整条运行既无快照也无任何断言结论。
+过程断言归 #8。可信度判据已于 #18 从「比条数」改为逐调用比对：轨迹里的 dida 调用与调用日志逐条对，与 dida 无关的 PowerShell 命令不参与判断。
 
 ## 沙箱
 
@@ -131,7 +131,7 @@ run-<runId>/
 - `dida.ps1`：一行 PowerShell 壳，`node dida-shim.mjs <node 可执行> <真 CLI 脚本> @args`。PowerShell 同目录内优先命中它，`@args` 原样展开，多行参数保真。
 - `dida.cmd`：一行 shell 壳，`node dida-shim.mjs <node 可执行> <真 CLI 脚本> %*`。供 agent 显式写 `dida.cmd` 全名时使用；这一路的多行与空串值都会失真。
 - `dida-shim.mjs`：判定 + 记账 + 转发。
-- `lib/`：shim 只依赖的三个模块（`calllog.mjs`、`created.mjs`、`guard.mjs`），外加沙箱生成时烘焙的 `guard-config.mjs`（测试清单集合）。
+- `lib/`：shim 用到的模块（`calllog.mjs`、`created.mjs`、`guard.mjs`，以及 `calllog.mjs` 转手引入的 `powershell.mjs`），外加沙箱生成时烘焙的 `guard-config.mjs`（测试清单集合）。
 
 **为什么不是 `CALL "<真 dida.cmd>" %*`**：实测 `.cmd` 的 `%*` 转发在含换行的参数上会截断到第一行，`%VAR%` 也会被展开。改成从真 `.cmd` 里解析出 node 与脚本入口后直接 spawn，argv 由 `CreateProcess` 原样传递，空格、引号、中文、`|`、`&`、`%` 都保真。解析不到入口时直接报错，不降级成自递归。
 
@@ -159,7 +159,7 @@ run-<runId>/
 - 参数解析复刻 commander 语义：`--flag=value`、flag 夹在位置参数中间、`--` 之后一律当位置参数、重复 flag 全部校验、`--project=` 空值视为解析不出目标。
 - 写命令缺 `--project` 时错误文本与真 CLI 不同（真 CLI 报 required option），两条路都写不出去。
 
-**已知边界**：沙箱 `bin/` 里放 `dida.ps1` 与 `dida.cmd` 两份壳。PowerShell 同目录内优先命中 `.ps1`，其 `@args` 原样展开、多行 `--content` 保真；显式写 `dida.cmd` 时会落到 `.cmd`，那里的 `%*` 仍把多行截成第一行。agent 仍可用绝对路径直接调真 `dida.cmd` 绕过 shim，靠 `crossCheck` 在报告里标出「日志条数与轨迹对不上」——但那条判据也把非 dida 的 PowerShell 调用算进分母，条数不等不等于真的绕过了（#18）。
+**已知边界**：沙箱 `bin/` 里放 `dida.ps1` 与 `dida.cmd` 两份壳。PowerShell 同目录内优先命中 `.ps1`，其 `@args` 原样展开、多行 `--content` 保真；显式写 `dida.cmd` 时会落到 `.cmd`，那里的 `%*` 仍把多行截成第一行。agent 仍可用绝对路径直接调真 `dida.cmd` / `dida.ps1` 绕过 shim，`crossCheck` 逐调用比对会点名那几次调用「在日志里找不到对应」；`node <脚本>` 入口不在判据范围内。
 
 ## 产物
 

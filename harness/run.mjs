@@ -109,24 +109,33 @@ export function retainedSummaryLines(entries) {
 }
 
 // 一条 run 的可信度结论：三面表的第一面，喂给 decideAssertion。
-// 轨迹一条可解析的事件都没有时，shapeCalls 是 0，与「一次 PowerShell 都没调」看不出区别——
-// 那种运行无从比较，判「无法判定」而不是「一致」。
+// 轨迹读不出任何可解析事件时，判据没有可比对的对象，判「无法判定」而不是「一致」。
 //
-// 只产出 status / detail / 条数，不产出 consistent 布尔：三态里「无从判定」时
-// `logged >= shapeCalls` 可能为真，那个布尔与 status 相反，留在 manifest 里会误导读者。
+// 只产出 status / detail / 统计，不产出 consistent 布尔：三态里「无从判定」时
+// 旧布尔可能为真，与 status 相反，留在 manifest 里会误导读者。
 export function credibilityOf({ calls, toolCalls, events }) {
   const checked = crossCheck(calls, toolCalls);
   const transcriptUsable = events.some((event) => event.type !== 'unparseable');
   const status = crossCheckStatus(checked, { transcriptUsable });
   return {
     status,
-    calls: checked.calls,
-    shapeCalls: checked.shapeCalls,
-    // 轨迹读不出时那两个数是 0，报出来等于说「观测到 0 次调用」——那是没观测到的事实。
-    detail: status === 'indeterminate'
-      ? `轨迹 ${events.length} 条事件，没有一条能解析`
-      : `${checked.calls} 条 dida 调用 / ${checked.shapeCalls} 次 PowerShell`,
+    detail: credibilityDetail({ status, checked, events, transcriptUsable }),
+    // 报告要能指向证据：读者得自己核对是哪几次调用没对上（#18 移交的第 3 条）。
+    unmatched: checked.unmatched ?? [],
+    reason: checked.reason,
   };
+}
+
+function credibilityDetail({ status, checked, events, transcriptUsable }) {
+  if (!transcriptUsable) return `轨迹 ${events.length} 条事件，没有一条能解析`;
+  if (status === 'consistent') return '轨迹里的 dida 调用在日志里都有对应';
+  if (status === 'indeterminate') {
+    return checked.reason === 'unparsed'
+      ? '轨迹里有命令解析不出是不是 dida 调用（变量、拼接等），无从比对'
+      : '轨迹里的 PowerShell 调用没有命令文本，无从比对';
+  }
+  const listed = (checked.unmatched ?? []).map((call) => call.argv.join(' ')).join('；');
+  return `${checked.unmatched.length} 次 dida 调用在日志里找不到对应：${listed}`;
 }
 
 // 清场出问题只影响这一条 run 的退出码，不阻断后续 scenario：账本按 runId 隔离。

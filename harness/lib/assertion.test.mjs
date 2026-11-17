@@ -254,7 +254,7 @@ test('可信度检查无法判定 → invalid，cause=indeterminate，快照同�
   });
   assert.equal(out.status, 'invalid');
   assert.equal(out.cause, 'indeterminate');
-  assert.match(out.detail, /轨迹读不出可解析的事件/);
+  assert.match(out.detail, /轨迹读不出可比对的调用/);
   assert.equal(taken, 0);
 });
 
@@ -342,17 +342,17 @@ test('可信度无法判定时断言模块同样不被调用', async () => {
   assert.equal(Object.hasOwn(out, 'evaluated'), false);
 });
 
-test('可信度条数与原因写进 results，不因短路而丢', async () => {
+test('可信度结论写进 detail 与 results，不因短路而丢', async () => {
   const out = await decideAssertion({
     completed: true,
-    crossCheck: { status: 'inconsistent', detail: '3 条 dida 调用 / 4 次 PowerShell' },
+    crossCheck: { status: 'inconsistent', detail: '1 次 dida 调用在日志里找不到对应：task create --title z' },
     takeSnapshot: () => { throw new Error('不该被调用'); },
     assertionFn: () => { throw new Error('不该被调用'); },
     input: INPUT,
   });
-  // 第一面的结论要完整：条数（detail 与 actual）、原因、以及 cause 决定的标题口径
-  assert.match(out.detail, /3 条 dida 调用 \/ 4 次 PowerShell/);
-  assert.match(out.results[0].actual, /3 条 dida 调用 \/ 4 次 PowerShell/);
+  // 第一面的结论要完整：点名了哪次调用（detail 与 actual）、以及 cause 决定的标题口径
+  assert.match(out.detail, /task create --title z/);
+  assert.match(out.results[0].actual, /task create --title z/);
   assert.equal(out.results[0].ok, false);
   assert.equal(out.results.length, 1);
 });
@@ -413,17 +413,20 @@ test('可信度失败时 detail 里不并加快照错误——快照根本没取
   assert.equal(Object.hasOwn(out, 'evaluated'), false);
 });
 
-test('可信度结果行的 expected 不声称「调用都能归因」——条数不等不等于有调用没被记录', async () => {
+// 判据改成逐调用比对之后（#18），失败行要说的是「哪几次调用没进日志」，
+// 不再是「条数不等」——后者既抓不到总数反多的绕过，还会把文件操作误报成绕过。
+test('可信度不一致时 results 行点名没对上的调用，不提条数', async () => {
   const out = await decideAssertion({
     completed: true,
-    crossCheck: { status: 'inconsistent', detail: '3 / 4' },
+    crossCheck: { status: 'inconsistent', detail: '1 次 dida 调用在日志里找不到对应：task create --title z' },
     takeSnapshot: () => { throw new Error('不该被调用'); },
     assertionFn: () => [{ ok: true }],
     input: INPUT,
   });
   const row = out.results[0];
-  assert.doesNotMatch(row.expected, /调用都能归因/);
-  assert.match(row.actual, /不等于有调用没被记录/);
+  assert.match(row.actual, /task create --title z/);
+  assert.doesNotMatch(row.actual, /条数/);
+  assert.match(row.expected, /都被 shim 记录/);
 });
 
 // state.json 与 completed 无关的那套旧语义已作废（ADR-0014）：会话没正常结束时

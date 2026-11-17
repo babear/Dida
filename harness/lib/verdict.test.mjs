@@ -154,7 +154,7 @@ const CROSS_MANIFEST = {
   session: { exitCode: 0, timedOut: false, turns: 3, costUsd: 0 },
   created: [],
   cleanup: { deleted: [] },
-  calls: { path: 'c', total: 1, rejected: 0, outOfBounds: 0, crossCheck: { calls: 1, shapeCalls: 9, status: 'inconsistent' } },
+  calls: { path: 'c', total: 1, rejected: 0, outOfBounds: 0, crossCheck: { status: 'inconsistent', detail: '1 次 dida 调用在日志里找不到对应：task get' } },
 };
 
 test('会话没正常结束时，报告不渲染可信度结论——判定链没开始，没有这组结论', async () => {
@@ -201,7 +201,16 @@ test('crossCheck 三态：consistent / inconsistent / indeterminate 各写各的
   };
   const at = (status) => renderReport({
     ...base,
-    calls: { path: 'c', total: 1, rejected: 0, outOfBounds: 0, crossCheck: { calls: 1, shapeCalls: 1, status } },
+    calls: {
+      path: 'c',
+      total: 1,
+      rejected: 0,
+      outOfBounds: 0,
+      crossCheck: {
+        status,
+        detail: status === 'consistent' ? '轨迹里的 dida 调用在日志里都有对应' : '轨迹里有命令解析不出是不是 dida 调用',
+      },
+    },
   });
 
   assert.match(at('consistent'), /与轨迹对得上/);
@@ -241,8 +250,7 @@ test('invalidLabel 三种 cause 各自不同，未知退回通用', () => {
 });
 
 // 可信度失败即终止判定链（ADR-0014）：报告里只有第一面这一节结论。
-// 一次运行只给一个结论——读者无从判断「结果不可信」旁边那组断言该不该信，
-// 而判据至今只比条数（#18），那组结论本身可能就是错的。
+// 一次运行只给一个结论——读者无从判断「结果不可信」旁边那组断言该不该信。
 // 旧 manifest 里残留的 evaluated 字段一并忽略：--clean 会用当前代码重渲染旧报告。
 test('可信度失败时报告只有一面结论，旧 manifest 残留的 evaluated 也不渲染', () => {
   const text = renderVerdict({

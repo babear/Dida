@@ -134,12 +134,17 @@ test('报告写明沙箱是保留还是已删除', () => {
   assert.match(renderReport({ ...MANIFEST, sandboxRetained: false }), /已删除/);
 });
 
-test('报告写明调用日志与轨迹是否对得上，且不把条数不等说成绕过', () => {
-  const ok = renderReport({ ...MANIFEST, calls: { ...MANIFEST.calls, crossCheck: { calls: 12, shapeCalls: 10, consistent: true } } });
-  const bad = renderReport({ ...MANIFEST, calls: { ...MANIFEST.calls, crossCheck: { calls: 3, shapeCalls: 10, consistent: false } } });
+test('报告写明调用日志与轨迹是否对得上，不一致时点名是哪次调用没对上', () => {
+  const ok = renderReport({ ...MANIFEST, calls: { ...MANIFEST.calls, crossCheck: { status: 'consistent' } } });
+  const bad = renderReport({
+    ...MANIFEST,
+    calls: { ...MANIFEST.calls, crossCheck: { status: 'inconsistent', detail: '1 次 dida 调用在日志里找不到对应：task create --title z' } },
+  });
   assert.match(ok, /对得上/);
   assert.match(bad, /与轨迹对不上/);
-  // 条数不等也可能是文件操作抬高了分母，不能断言成绕过
+  // 判据改的是「逐调用比对」（#18）：读者要能看出是哪一次，而不是自己对着两个数猜
+  assert.match(bad, /task create --title z/);
+  // 不把结果说成「已确认绕过」：判据只能指出这次调用没进日志
   assert.doesNotMatch(bad, /绕过了 shim/);
 });
 

@@ -96,7 +96,7 @@ export function writeShim(binDir, realDidaCmd, allowedProjects) {
   // shim 只依赖这几个模块；整目录复制会把 run.mjs 无关的东西也带进沙箱。
   const libDir = path.join(binDir, 'lib');
   fs.mkdirSync(libDir, { recursive: true });
-  for (const name of ['calllog.mjs', 'created.mjs', 'guard.mjs']) {
+  for (const name of ['calllog.mjs', 'powershell.mjs', 'created.mjs', 'guard.mjs']) {
     fs.copyFileSync(path.join(SHIM_LIB_SOURCE, name), path.join(libDir, name));
   }
   fs.writeFileSync(path.join(libDir, 'guard-config.mjs'), renderGuardConfig(allowedProjects));

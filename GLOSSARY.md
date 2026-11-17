@@ -29,7 +29,7 @@ shim 记下的 `dida` 调用序列，`runs/<runId>/calls.ndjson`，每行一条 
 _Avoid_: 记录、shim 日志
 
 **工具面**:
-被测 agent 启动时被授予的工具名集合，由 `harness/agents.json` 定义。本项目的工具面是 `Skill`、`PowerShell`、`Read`、`Glob`、`Grep`、`Write`；**不含 `Bash`**——shim 没有 bash 形态，且可信度检查只数 `PowerShell`（见 #37）。
+被测 agent 启动时被授予的工具名集合，由 `harness/agents.json` 定义。本项目的工具面是 `Skill`、`PowerShell`、`Read`、`Glob`、`Grep`、`Write`；**不含 `Bash`**——shim 没有 bash 形态，可信度检查只从 `PowerShell` 调用里找 dida 命令（见 #37）。
 _Avoid_: 工具箱、权限、allowedTools（除非指命令行参数）
 
 **shell**:
@@ -73,7 +73,7 @@ _Avoid_: 结果断言、state check
 _Avoid_: 行为断言、调用断言
 
 **可信度检查**:
-对调用日志条数与轨迹里命令调用数的比对，判断一个 run 的结果能否归因。少于时**可能**有调用绕过 shim，也可能只是非 dida 的命令抬高了分母——判据分不清（#18）。判定链的第一面；不过即终止，不取快照、不判后面两面。轨迹里没有可解析的事件时判无从比较，不判一致。
+判断一次 run 的调用是否都被 shim 记录，即结果能否归因。逐次比对轨迹里的 dida 调用与调用日志，对不上的那几次就是没被记录；与 dida 无关的 PowerShell 命令不参与判断。判定链的第一面；不过即终止，不取快照、不判后面两面。轨迹里没有可解析的事件、或有命令解析不出是不是 dida 调用时判无从比较，不判一致。
 _Avoid_: 一致性检查、交叉校验
 
 **判定**:

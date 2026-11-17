@@ -185,25 +185,43 @@ test('两个字段指向同一个对象不算环，值要原样留下', (t) => {
 // 接线测试：runOne 不导出，这层覆盖「crossCheck → 三态 → detail」的组装，
 // 免得 run.mjs 里接错时单测仍全绿。
 
-test('credibilityOf：日志条数够时判 consistent', () => {
+test('credibilityOf：轨迹里的调用在日志里都有对应时判 consistent', () => {
   const out = credibilityOf({
     calls: [{ argv: ['task', 'get'] }, { argv: ['project', 'list'] }],
-    toolCalls: [{ name: 'PowerShell' }, { name: 'PowerShell' }],
+    toolCalls: [
+      { name: 'PowerShell', input: { command: 'dida task get' } },
+      { name: 'PowerShell', input: { command: 'dida project list' } },
+    ],
     events: [{ type: 'assistant' }],
   });
   assert.equal(out.status, 'consistent');
-  assert.equal(out.detail, '2 条 dida 调用 / 2 次 PowerShell');
-  assert.equal(out.calls, 2);
+  assert.match(out.detail, /都有对应/);
 });
 
-test('credibilityOf：日志少于轨迹里的 PowerShell 次数时判 inconsistent', () => {
+test('credibilityOf：有一次 dida 调用没进日志时判 inconsistent，detail 点出是哪次', () => {
   const out = credibilityOf({
     calls: [{ argv: ['task', 'get'] }],
-    toolCalls: [{ name: 'PowerShell' }, { name: 'PowerShell' }, { name: 'PowerShell' }],
+    toolCalls: [
+      { name: 'PowerShell', input: { command: 'dida task get' } },
+      { name: 'PowerShell', input: { command: '& "C:\\bin\\dida.cmd" task create --title z' } },
+    ],
     events: [{ type: 'assistant' }],
   });
   assert.equal(out.status, 'inconsistent');
-  assert.equal(out.detail, '1 条 dida 调用 / 3 次 PowerShell');
+  assert.match(out.detail, /task create --title z/);
+  assert.deepEqual(out.unmatched.map((c) => c.argv), [['task', 'create', '--title', 'z']]);
+});
+
+test('credibilityOf：非 dida 的 PowerShell 命令不会被误判为绕过', () => {
+  const out = credibilityOf({
+    calls: [{ argv: ['task', 'get'] }],
+    toolCalls: [
+      { name: 'PowerShell', input: { command: 'Get-ChildItem -Force' } },
+      { name: 'PowerShell', input: { command: 'dida task get' } },
+    ],
+    events: [{ type: 'assistant' }],
+  });
+  assert.equal(out.status, 'consistent');
 });
 
 test('credibilityOf：轨迹一条可解析事件都没有时判 indeterminate，不是 consistent', () => {
