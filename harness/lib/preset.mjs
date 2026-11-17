@@ -184,7 +184,7 @@ export async function loadPreset(scenarioDir) {
 }
 
 // 取 preset 声明的命令。清单是副本：它拿到的必须是本次 run 实际用的那一份，
-// 但改不动 harness 手里的这份（后者的同一数组还要建沙箱、传清场）。
+// 但改不动 harness 手里的这份（后者的同一数组还要建运行目录、传清场）。
 function declaredCommands(presetFn, projects) {
   let commands;
   try {
@@ -202,7 +202,7 @@ function declaredCommands(presetFn, projects) {
 
 // 执行顺序保证「建出的 id 立刻进账本」：每条命令转发后马上 recordCreated，
 // 中途失败时已建的任务留在账本里，`--clean <runId>` 读得到、删得掉。
-// 预设在建沙箱之前跑，用真 CLI——shim 是给被测 agent 用的。
+// 预设在建运行目录之前跑，用真 CLI——shim 是给被测 agent 用的。
 // 加载也在这一处：模块坏掉（没有默认导出）与执行失败对编排层是同一件事——
 // 这次 run 不进入会话、不清场。
 export async function runPreset({ scenarioDir, dida, projects, createdFile }) {

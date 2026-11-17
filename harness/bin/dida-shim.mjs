@@ -6,7 +6,7 @@ import { recordCreated } from './lib/created.mjs';
 import { decide, rejectText, stripNodeAssertion } from './lib/guard.mjs';
 import { TEST_PROJECTS } from './lib/guard-config.mjs';
 
-// 形参由 sandbox 生成 bin/dida.ps1 与 bin/dida.cmd 时注入：<node 可执行> <真 CLI 脚本> <用户传入的 argv...>
+// 形参由运行目录生成 shim/dida.ps1 与 shim/dida.cmd 时注入：<node 可执行> <真 CLI 脚本> <用户传入的 argv...>
 const [program, script, ...argv] = process.argv.slice(2);
 
 const callLogPath = process.env.DIDA_CALL_LOG;
@@ -21,7 +21,7 @@ if (!callLogPath || !createdFile) {
   process.exit(1);
 }
 
-// 测试清单集合来自沙箱里烘焙好的 guard-config.mjs，不读环境变量：
+// 测试清单集合来自运行目录里烘焙好的 guard-config.mjs，不读环境变量：
 // 被测 agent 能读也能改进程环境，从 env 读白名单等于把判定权交给它。
 // 集合为空时 decide 会拒绝一切需要目标的写命令（没有可判定的边界就不放行），读命令照常转发。
 const verdict = decide(argv, TEST_PROJECTS);

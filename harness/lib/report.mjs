@@ -147,7 +147,7 @@ export function retentionCause(manifest) {
 export function renderVerdict({ assertion, kind, run }) {
   const heading = headingFor(kind);
   const lines = [heading, ''];
-  // 预设失败发生在建沙箱之前（#19）：这次 run 根本没进入会话，判定链无从开始。
+  // 预设失败发生在建运行目录之前（#19）：这次 run 根本没进入会话，判定链无从开始。
   // 与「缺断言」并列成一类用法错误——修 preset.mjs，不是改 skill。
   // 收尾那一句与保留现场共用 retentionNote，两处措辞同源。
   if (assertion?.status === 'preset-failed') {
@@ -232,7 +232,7 @@ export function renderReport(manifest) {
       renderVerdict({ assertion: manifest.assertion, kind: manifest.kind, run: manifest.run }),
     ].join('\n');
   }
-  // 首行就是三个事实，人打开报告第一眼就能回答"测的是哪份 skill、哪个模型、沙箱在哪"。
+  // 首行就是三个事实，人打开报告第一眼就能回答"测的是哪份 skill、哪个模型、运行目录在哪"。
   const lines = [
     renderHeader(manifest),
     runTitle(manifest),
@@ -305,7 +305,7 @@ export function renderReport(manifest) {
     }[status];
     if (line) lines.push(line);
   }
-  lines.push(`- 沙箱${manifest.sandboxRetained === false ? '已删除' : '保留'}：${manifest.sandbox}`);
+  lines.push(`- 运行目录${manifest.sandboxRetained === false ? '已删除' : '保留'}：${manifest.sandbox}`);
 
   lines.push('', '## 模型', '');
   lines.push('CLI 自报的是别名，不是实际执行的模型；真实模型看下面的映射。', '');
@@ -333,7 +333,7 @@ export function renderSummary(manifest) {
       : `在测试清单里建了 ${created.length} 条任务（${created.map((e) => e.id).join('、')}）。`,
   ];
   if (cleanup.deferred) {
-    parts.push(`${retentionCause(manifest)}，任务与沙箱一并保留（${retentionNote(manifest.run)}）。`);
+    parts.push(`${retentionCause(manifest)}，任务与运行目录一并保留（${retentionNote(manifest.run)}）。`);
   } else if (cleanup.error) {
     parts.push(`清场未执行：${cleanup.error}`);
   } else {

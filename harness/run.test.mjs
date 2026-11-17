@@ -151,7 +151,7 @@ test('断言模块加载失败同样落报告，与缺断言分开写', (t) => {
   assert.doesNotMatch(report, /缺断言/);
 });
 
-test('用例没跑起来时不建沙箱、不开会话：manifest 里没有会话记录', (t) => {
+test('用例没跑起来时不建运行目录、不开会话：manifest 里没有会话记录', (t) => {
   const root = tmpRepo(t);
   const { runDir } = writeUnusableRun(root, 's1', { skillPath: 'skills/dida-cli', status: 'missing', detail: 'x' });
   const manifest = JSON.parse(fs.readFileSync(path.join(runDir, 'manifest.json'), 'utf8'));
@@ -303,14 +303,14 @@ test('--hold 让通过的运行也保留现场', () => {
   assert.equal(cleanupGate({ status: 'passed', hold: true }), true);
 });
 
-test('--keep-sandbox 不阻止清场：它只管沙箱，清场看的是 --hold 与判定结论', () => {
-  // README 的参数表把 --keep-sandbox 定义为「成功时也保留沙箱」。
+test('--keep-sandbox 不阻止清场：它只管运行目录，清场看的是 --hold 与判定结论', () => {
+  // README 的参数表把 --keep-sandbox 定义为「成功时也保留运行目录」。
   // 把它并进门控会让 PASSED + --keep-sandbox 连任务一起留下，
   // 与验收标准「只有 PASSED 执行清场」相反。
   assert.equal(cleanupGate({ status: 'passed', hold: false }), false);
 });
 
-// 探针永不清场（ADR-0015）：它的全部价值就是现场——任务、沙箱、state.json
+// 探针永不清场（ADR-0015）：它的全部价值就是现场——任务、运行目录、state.json
 // 都要留着供人打开客户端对着写断言。这条不能靠「探针结论不是 passed」这种
 // 巧合成立：将来探针若多一个新结论词，清场就会悄悄漏进来。
 test('探针无论结论如何都不清场', () => {
@@ -354,7 +354,7 @@ test('没有保留现场时也不写清单', () => {
 });
 
 // #36：Windows 继承来的键名大小写不定（通常是 `Path`）。写一个固定的 `PATH` 会在对象里
-// 造出两个同义键，spawn 时后者胜出、继承的 PATH 整个丢掉——沙箱里裸 node 就找不到了。
+// 造出两个同义键，spawn 时后者胜出、继承的 PATH 整个丢掉——运行目录里裸 node 就找不到了。
 test('PATH 前置复用已有的那个键，不新造同名不同大小写的键', () => {
   const inherited = 'C:\\Windows\\System32;C:\\Other';
   for (const key of ['Path', 'PATH', 'path']) {
@@ -392,8 +392,8 @@ test('credibilityOf：空轨迹与全是垃圾行的 detail 指向不同的下�
   assert.notEqual(empty.detail, garbage.detail);
 });
 
-// 沙箱 bin/ 里的 dida.cmd 是 shim 的壳：写全名调它有日志，不能判成绕过。
-test('credibilityOf：沙箱 bin 下的全名调用算 shim，不算绕过', () => {
+// 运行目录 shim/ 里的 dida.cmd 是 shim 的壳：写全名调它有日志，不能判成绕过。
+test('credibilityOf：运行目录 shim/ 下的全名调用算 shim，不算绕过', () => {
   const sandboxBin = 'C:\Temp\run-abc123\bin';
   const out = credibilityOf({
     calls: [{ argv: ['task', 'get'] }],
@@ -658,9 +658,9 @@ test('sessionEnvOf：PATH 前置 shim、CLAUDE_CONFIG_DIR 指向 config', () => 
   assert.equal(env.DIDA_CREATED_FILE, 'C:\logs\created.ndjson');
 });
 
-// cwd 必须是 work/ 而不是整个沙箱——这是 #16 改动的全部意义。
+// cwd 必须是 work/ 而不是整个运行目录——这是 #16 改动的全部意义。
 // 直接读源码断言这条耦合：runOneSession 若改回 sandbox.root，这条会红。
-test('会话以 work/ 为 cwd，而不是整个沙箱', () => {
+test('会话以 work/ 为 cwd，而不是整个运行目录', () => {
   const source = fs.readFileSync(path.join(import.meta.dirname, 'run.mjs'), 'utf8');
   assert.match(source, /cwd: sandbox\.workDir/, 'cwd 必须是 sandbox.workDir');
   assert.doesNotMatch(source, /cwd: sandbox\.root/, 'cwd 不该是 sandbox.root：那会让 agent 看到 shim 与配置');

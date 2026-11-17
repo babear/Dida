@@ -21,7 +21,7 @@ test('agents.json 的工具面不含 Bash：shim 覆盖不到它，可信度检�
 });
 
 // 工具面不含 Write：当前没有 scenario 需要写文件（checklist-desc-field 实测 Write 使用次数为 0），
-// 而它能直接覆写 bin/lib/guard-config.mjs（#16）。想去掉这条断言的人先回答：
+// 而它能直接覆写 shim/lib/guard-config.mjs（#16）。想去掉这条断言的人先回答：
 // 哪条 scenario 需要写？PowerShell 的 Set-Content 同样能写文件，Write 不多给能力。
 test('agents.json 的工具面不含 Write：它能直接覆写越界防护的白名单', () => {
   const tools = toolFaceOf(path.join(import.meta.dirname, '..', 'agents.json'));
@@ -176,7 +176,7 @@ test('work/ 里只有 materials：shim、配置、agents.json 都不在 cwd 视�
   }
 });
 
-test('createSandbox 把 materials 连子目录一起复制进沙箱', (t) => {
+test('createSandbox 把 materials 连子目录一起复制进运行目录', (t) => {
   const { dir, skillPath, agentsSourcePath, settingsPath, runId } = sandboxFixture(t);
 
   const materialsDir = path.join(dir, 'materials-src');
@@ -212,7 +212,7 @@ test('createSandbox 没有 materials 时不建空目录', (t) => {
   assert.equal(fs.existsSync(path.join(sandbox.workDir, 'materials')), false);
 });
 
-// #13 的核心断言：PowerShell 在沙箱 bin 内解析 dida 时必须命中 .ps1，
+// #13 的核心断言：PowerShell 在运行目录 shim/ 内解析 dida 时必须命中 .ps1，
 // 且多行参数要经 @args 原样到达真 CLI。只断言生成文本不够——真正决定
 // 保真与否的是 PowerShell 的解析优先级，那条只能端到端跑一次才知道。
 // 假 CLI 把观测结果写文件：混在 stdout 里会被 PowerShell 自身的输出干扰，
@@ -239,7 +239,7 @@ function findPowerShell() {
 // PowerShell 里嵌路径：单引号串内的 ' 要写成 ''，否则 sandboxDir 含引号时会拼出坏脚本。
 const psLiteral = (value) => `'${value.replace(/'/g, "''")}'`;
 
-// 建沙箱 bin，并让假 CLI 把收到的 argv 写进 observed.json。返回环境前缀与观测文件路径，
+// 建运行目录 shim/，并让假 CLI 把收到的 argv 写进 observed.json。返回环境前缀与观测文件路径，
 // 供下面几条需要真起 PowerShell 的用例共用。
 function shimFixture(dir) {
   const observed = path.join(dir, 'observed.json');
@@ -260,7 +260,7 @@ function shimFixture(dir) {
   return { env, observed, binDir };
 }
 
-PS_TEST('PowerShell 命中 .ps1：多行 --content 经沙箱 shim 到达真 CLI 时仍是多行', (t) => {
+PS_TEST('PowerShell 命中 .ps1：多行 --content 经运行目录 shim 到达真 CLI 时仍是多行', (t) => {
   const shell = findPowerShell();
   if (!shell) return t.skip('本机没有 PowerShell');
   const { env, observed, binDir } = shimFixture(sandboxDir(t));
