@@ -28,7 +28,7 @@ const MANIFEST = {
   cleanup: { deleted: ['aaaa00000000000000000001'], failed: [], remaining: [], mismatched: [] },
 };
 
-test('报告首行同时给出 skill 指纹、模型与沙箱绝对路径', () => {
+test('报告首行同时给出 skill 指纹、模型与运行目录绝对路径', () => {
   const report = renderReport(MANIFEST);
   const firstLine = report.split('\n')[0];
   assert.match(firstLine, /a1b2c3d4e5f6/);
@@ -129,9 +129,12 @@ test('报告写出三层模型信息：CLI 自报、真实映射、代理地址'
   assert.match(report, /opus/);
 });
 
-test('报告写明沙箱是保留还是已删除', () => {
-  assert.match(renderReport({ ...MANIFEST, sandboxRetained: true }), /保留/);
-  assert.match(renderReport({ ...MANIFEST, sandboxRetained: false }), /已删除/);
+test('报告写明运行目录是保留还是已删除', () => {
+  // 断言完整标签而不是 /保留/：后者在标签退回「沙箱保留」时仍然通过，
+  // 那就等于没有守住这次改名的结果（ADR-0016）。
+  assert.match(renderReport({ ...MANIFEST, sandboxRetained: true }), /运行目录保留/);
+  assert.match(renderReport({ ...MANIFEST, sandboxRetained: false }), /运行目录已删除/);
+  assert.doesNotMatch(renderReport({ ...MANIFEST, sandboxRetained: false }), /沙箱/);
 });
 
 test('报告写明调用日志与轨迹是否对得上，不一致时点名是哪次调用没对上', () => {

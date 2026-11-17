@@ -96,7 +96,7 @@ test('loadScenario 给出用例目录本身，供调用方查 assert.mjs 在不�
   assert.equal(loadScenario(root, 's1').dir, dir);
 });
 
-test('materials 源目录里的子目录结构原样交给沙箱复制', (t) => {
+test('materials 源目录里的子目录结构原样交给运行目录复制', (t) => {
   const root = tmpRepo(t);
   const dir = writeScenario(root, 's1', { prompt: 'x' });
   fs.mkdirSync(path.join(dir, 'materials', 'nested'), { recursive: true });

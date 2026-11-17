@@ -69,11 +69,11 @@ export function resolveRealDidaCmd(searchPath = process.env.PATH ?? '') {
 const SHIM_SCRIPT_SOURCE = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'dida-shim.mjs');
 const SHIM_LIB_SOURCE = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'lib');
 
-// guard-config.mjs 的源码。测试清单集合烘焙进沙箱配置、不走环境变量：
+// guard-config.mjs 的源码。测试清单集合烘焙进运行目录的配置、不走环境变量：
 // 被测 agent 能改进程环境，一旦白名单从 env 来，它就能把真实清单 id 塞进去让 shim 放行。
 export function renderGuardConfig(projects) {
   if (!Array.isArray(projects)) {
-    // 缺测试清单集合就建不出可用的沙箱：宁可当场报错，也不要生成
+    // 缺测试清单集合就建不出可用的运行目录：宁可当场报错，也不要生成
     // `TEST_PROJECTS = undefined` 让 shim 在缺配置的状态下跑起来。
     throw new Error('createSandbox 需要 testProjects：没有测试清单集合就无法生成越界判定配置');
   }
@@ -93,7 +93,7 @@ export function writeShim(binDir, realDidaCmd, allowedProjects) {
   fs.mkdirSync(binDir, { recursive: true });
   const shimJs = path.join(binDir, 'dida-shim.mjs');
   fs.copyFileSync(SHIM_SCRIPT_SOURCE, shimJs);
-  // shim 只依赖这几个模块；整目录复制会把 run.mjs 无关的东西也带进沙箱。
+  // shim 只依赖这几个模块；整目录复制会把 run.mjs 无关的东西也带进运行目录。
   const libDir = path.join(binDir, 'lib');
   fs.mkdirSync(libDir, { recursive: true });
   for (const name of ['calllog.mjs', 'powershell.mjs', 'created.mjs', 'guard.mjs']) {
@@ -111,12 +111,35 @@ export function writeShim(binDir, realDidaCmd, allowedProjects) {
   return { program: parsed.program, script: parsed.script };
 }
 
+// 运行目录的落点。createSandbox 与测试共用同一条路径规则，只在这里定义一次——
+// 两处各写一份的话，改了一处而漏另一处，症状是目录留在盘上没人管。
+export function sandboxRootOf(runId) {
+  return path.join(os.tmpdir(), `run-${runId}`);
+}
+
+// 运行目录分两块，只有 work/ 会进入被测 agent 的视野：
+//
+//   run-<id>/
+//   ├── work/            ← cwd。agent 站在这，看得到这里的一切
+//   │   └── materials/        scenario 素材（任务要读的就是它）
+//   ├── config/          ← CLAUDE_CONFIG_DIR。skill 与 settings 从这读，不在 cwd 里
+//   │   ├── settings.json
+//   │   └── skills/dida-cli/
+//   ├── agents.json      ← --agents 指的文件，读完就完事
+//   └── shim/            ← PATH 前置，命令能被找到但目录不可见
+//
+// 早先四样都建在 root 下、又拿 root 当 cwd，等于把 shim、配置、工具面定义全摆在
+// agent 面前。它确实会去翻（实测 `Get-ChildItem -Force -Recurse materials, .claude, bin`），
+// 看到就可能有下一步动作（#16）。挪出去不是安全边界——agent 有 PowerShell，
+// 绝对路径仍读得到（#3）——而是让"无意看到"不再发生，而实测里那正是唯一发生的事。
 export function createSandbox({ runId, skillPath, agentsSourcePath, scenario, settingsPath, testProjects }) {
-  const root = path.join(os.tmpdir(), `run-${runId}`);
-  const configDir = path.join(root, '.claude');
-  const binDir = path.join(root, 'bin');
+  const root = sandboxRootOf(runId);
+  const workDir = path.join(root, 'work');
+  const configDir = path.join(root, 'config');
+  const binDir = path.join(root, 'shim');
   const sandboxSkillPath = path.join(configDir, 'skills', SKILL_NAME);
 
+  fs.mkdirSync(workDir, { recursive: true });
   fs.mkdirSync(configDir, { recursive: true });
   fs.cpSync(skillPath, sandboxSkillPath, { recursive: true });
 
@@ -124,6 +147,9 @@ export function createSandbox({ runId, skillPath, agentsSourcePath, scenario, se
   const skillFingerprint = fingerprintDir(sandboxSkillPath);
   appendCallerMarker(sandboxSkillPath, runId);
 
+  // settings 必须落在 CLAUDE_CONFIG_DIR 里：实测把 CLAUDE_CONFIG_DIR 指到只有 skills/
+  // 的目录、settings.json 缺席时，原生 ~/.claude/settings.json 不会回退生效，
+  // 会话直接判未登录。两件事绑在同一个开关上，没有"只换 skill 不换 settings"的粒度。
   const sourceSettings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
   const anthropicEnv = pickAnthropicEnv(sourceSettings);
   fs.writeFileSync(
@@ -133,17 +159,18 @@ export function createSandbox({ runId, skillPath, agentsSourcePath, scenario, se
 
   const agentsPath = path.join(root, 'agents.json');
   fs.copyFileSync(agentsSourcePath, agentsPath);
-  // 定义文件是唯一事实源，坏掉要在建沙箱时就报，而不是等 claude -p 起来后从 stderr 里猜
+  // 定义文件是唯一事实源，坏掉要在建运行目录时就报，而不是等 claude -p 起来后从 stderr 里猜
   toolFaceOf(agentsPath);
 
   const shim = writeShim(binDir, resolveRealDidaCmd(), testProjects);
 
   if (scenario.materialsDir) {
-    fs.cpSync(scenario.materialsDir, path.join(root, 'materials'), { recursive: true });
+    fs.cpSync(scenario.materialsDir, path.join(workDir, 'materials'), { recursive: true });
   }
 
   return {
     root,
+    workDir,
     configDir,
     binDir,
     agentsPath,

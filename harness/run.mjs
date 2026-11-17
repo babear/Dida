@@ -85,7 +85,7 @@ function emptyCleanup(overrides = {}) {
 // 门控看判定结论，不看会话退出码——一次 invalid 的运行会话可能正常结束，
 // 按退出码判会把它清掉，而它的账本恰恰可能盖不全（绕过 shim 建的任务清不掉）。
 // hold 是操作者的显式要求（--hold：跑完不清场），与判定结论无关。
-// 沙箱保留是另一件事：--keep-sandbox 只留沙箱、照常清场（见 README 的参数表）。
+// 运行目录保留是另一件事：--keep-sandbox 只留目录、照常清场（见 README 的参数表）。
 //
 // 探针永不清场（ADR-0015）：按 kind 判而不是靠「探针结论不是 passed」这个巧合——
 // 探针将来多一个结论词，清场就会悄悄漏进来。
@@ -237,6 +237,29 @@ export function verdictLines(assertion) {
   return lines;
 }
 
+// 会话进程的启动参数。cwd 取 work/ 而不是整个运行目录——shim、配置、工具面定义都在
+// 它的上一层，agent 列目录只看得到 materials/（#16）。这条装配关系是本改动的
+// 全部意义所在：它若改回 sandbox.root，agent 就重新看得到 shim 与配置。
+export function sessionEnvOf({ sandbox, callLogPath, createdFile }) {
+  // Windows 继承来的键名大小写不定（可能是 `Path`），直接写 `env.PATH` 会新增一个同名
+  // 不同大小写的键，spawn 时后者胜出、继承的 PATH 整个丢掉：运行目录里裸 node 就找不到了。
+  // 必须复用已有的那个键。见 #36。
+  const env = withPrependedPath(
+    { ...sanitizeEnv(process.env), CLAUDE_CONFIG_DIR: sandbox.configDir },
+    sandbox.binDir,
+  );
+  // shim 靠这两个环境变量定位本 run 的账本。测试清单集合不走环境变量：
+  // 被测 agent 能读也能改进程环境，白名单必须烘焙在运行目录的配置里。
+  env.DIDA_CALL_LOG = callLogPath;
+  env.DIDA_CREATED_FILE = createdFile;
+  return env;
+}
+
+export async function runOneSession({ argv, sandbox, callLogPath, createdFile, transcriptPath }) {
+  const env = sessionEnvOf({ sandbox, callLogPath, createdFile });
+  return runSession({ argv, cwd: sandbox.workDir, env, transcriptPath });
+}
+
 async function runOne(options, scenario, projects, assertionFn) {
   const id = scenario.id;
   const runKey = runId();
@@ -246,8 +269,8 @@ async function runOne(options, scenario, projects, assertionFn) {
 
   const createdFile = path.join(runDir, 'created.ndjson');
 
-  // 预设排在建沙箱之前（#19 / ADR-0012）：它只要本次清单、runId 与账本路径，
-  // 这三样到这里都确定了；失败时也不必浪费一次建沙箱。
+  // 预设排在建运行目录之前（#19 / ADR-0012）：它只要本次清单、runId 与账本路径，
+  // 这三样到这里都确定了；失败时也不必浪费一次建目录。
   // 它走真 CLI、不经 shim——shim 是给被测 agent 用的，预设不是什么都要拦住。
   // 建出的 id 立刻进同一份账本，于是自动清场与 --clean 都管得到。
   // 加载与执行都归 runPreset：两者失败对编排层是同一件事——不进入会话、不清场。
@@ -256,7 +279,7 @@ async function runOne(options, scenario, projects, assertionFn) {
       await runPreset({ scenarioDir: scenario.dir, dida: realDida(), projects, createdFile });
     } catch (error) {
       // 失败时**不清场**：账本留在 runDir，--clean <runId> 读得到、删得掉已建的任务。
-      // 也不建沙箱、不开会话——没有可判的事实，报一份只含判定与预设错误的报告。
+      // 也不建运行目录、不开会话——没有可判的事实，报一份只含判定与预设错误的报告。
       const manifest = {
         run: runKey,
         scenario: id,
@@ -292,18 +315,9 @@ async function runOne(options, scenario, projects, assertionFn) {
     agentsPath: sandbox.agentsPath,
   });
 
-  // Windows 继承来的键名大小写不定（可能是 `Path`），直接写 `env.PATH` 会新增一个同名
-  // 不同大小写的键，spawn 时后者胜出、继承的 PATH 整个丢掉：沙箱里裸 node 就找不到了。
-  // 必须复用已有的那个键。见 #36。
-  const env = withPrependedPath(
-    { ...sanitizeEnv(process.env), CLAUDE_CONFIG_DIR: sandbox.configDir },
-    sandbox.binDir,
-  );
-  // shim 靠这两个环境变量定位本 run 的账本。测试清单集合不走环境变量：
-  // 被测 agent 能读也能改进程环境，白名单必须烘焙在沙箱配置里。
-  env.DIDA_CALL_LOG = callLogPath;
-  env.DIDA_CREATED_FILE = createdFile;
-  const session = await runSession({ argv, cwd: sandbox.root, env, transcriptPath });
+  const session = await runOneSession({
+    argv, sandbox, callLogPath, createdFile, transcriptPath,
+  });
 
   const events = parseTranscript(transcriptPath);
   const summary = summarizeTranscript(events);
@@ -332,7 +346,7 @@ async function runOne(options, scenario, projects, assertionFn) {
     calls,
     toolCalls: summary.toolCalls,
     events,
-    // 沙箱 bin/ 下的 dida.cmd 也是 shim 的壳，写全名调它有日志，不是绕过。
+    // 运行目录 shim/ 下的 dida.cmd 也是 shim 的壳，写全名调它有日志，不是绕过。
     shimDir: sandbox.binDir,
   });
   const sample = takeSample({
@@ -509,7 +523,7 @@ function writeReport(runDir, manifest) {
 }
 
 // 用例配置错误也要留下报告：AC 要求报告里能读到原因，而不只是 stderr 一行。
-// 不建沙箱、不开会话，只落一份最小 manifest 与报告。
+// 不建运行目录、不开会话，只落一份最小 manifest 与报告。
 export function writeUnusableRun(repoRoot, id, { skillPath, status, detail }) {
   const runKey = runId();
   const runDir = path.join(ensureRunsDir(repoRoot), runKey);
@@ -536,9 +550,9 @@ async function main() {
   node harness/run.mjs --clean <runId>
 
   --scenario <id>     只跑这一条（默认跑全部正式用例；id 也可命中 probes/ 里的探针）
-  --skill-path <dir>  复制进沙箱的 skill 目录（默认 skills/dida-cli）
+  --skill-path <dir>  复制进运行目录的 skill 目录（默认 skills/dida-cli）
   --settings <file>   取 ANTHROPIC_* 键的来源（默认 ~/.claude/settings.json）
-  --keep-sandbox      成功时也保留沙箱（不影响清场）
+  --keep-sandbox      成功时也保留运行目录（不影响清场）
   --hold              跑完不清场，留现场
   --clean <runId>     只按该 run 的 created.ndjson 删除任务，然后退出`);
     return;
@@ -574,7 +588,7 @@ async function main() {
   }
 
   // 清单只收真正开过会话、有现场的 run：NOT FOUND 与 MISCONFIGURED 在开会话之前
-  // 就退出了，没有任务也没有沙箱，列进来只会让人去找一个不存在的现场。
+  // 就退出了，没有任务也没有运行目录，列进来只会让人去找一个不存在的现场。
   let failures = 0;
   const retainedRuns = [];
   for (const id of ids) {
@@ -662,7 +676,7 @@ async function main() {
       hold: options.hold,
       kind: scenario.kind,
     });
-    // 沙箱保留与清场是两件事：--keep-sandbox 只留沙箱，照常清场（README 参数表）。
+    // 运行目录保留与清场是两件事：--keep-sandbox 只留目录，照常清场（README 参数表）。
     const retained = defer || options.keepSandbox;
 
     // 先把会话事实落盘，再动清单：清场读账本出错时，manifest 与 report 必须已经在了。
@@ -679,7 +693,18 @@ async function main() {
     const finalManifest = { ...manifest, cleanup, sandboxRetained: retained };
     writeManifest(runDir, finalManifest);
     writeReport(runDir, finalManifest);
-    if (!retained) fs.rmSync(sandbox.root, { recursive: true, force: true });
+    // 删除失败要让后面三处都说实话：manifest 的 sandboxRetained、报告的「运行目录已删除」、
+    // 控制台的 (removed)。吞掉异常却仍报 removed，读报告的人会以为盘上没有残留。
+    let deleteError = null;
+    if (!retained) {
+      try {
+        fs.rmSync(sandbox.root, { recursive: true, force: true });
+      } catch (error) {
+        deleteError = error.code ?? error.message;
+        console.error(`    运行目录删除失败（${deleteError}）：${sandbox.root}`);
+        writeManifest(runDir, { ...finalManifest, sandboxRetained: true, sandboxDeleteError: deleteError });
+      }
+    }
     if (defer) retainedRuns.push({ run, scenario: id, status: manifest.assertion.status });
 
     // 清场失败只记 log 不中断：每条 scenario 的账本按 runId 隔离，删不掉自己的那几条
@@ -691,7 +716,7 @@ async function main() {
     //   探针：只有 sampled 是 0。incomplete / invalid 说明这份样本不能用，
     //        1 就是在告诉脚本「别拿它写断言」。
     const ok = manifest.assertion.status === (scenario.kind === 'probe' ? 'sampled' : 'passed');
-    if (!completed || cleanupProblem || !ok) failures += 1;
+    if (!completed || cleanupProblem || !ok || deleteError) failures += 1;
 
     const verdict = scenario.kind === 'probe'
       ? { sampled: 'SAMPLED', incomplete: 'INCOMPLETE', invalid: 'INVALID' }[manifest.assertion.status]
@@ -705,7 +730,7 @@ async function main() {
     console.log(`${verdict} ${id}  run=${run}`);
     console.log(`  skill sha256=${manifest.skill.sha256.slice(0, 16)} files=${manifest.skill.files} git=${manifest.skill.git.rev?.slice(0, 12)}${manifest.skill.git.dirty ? ' (dirty)' : ''}`);
     console.log(`  model alias=${manifest.model.requested_alias} provider=${manifest.model.provider}（别名不等于实际执行模型，真实映射见 manifest.model.alias_mapping）`);
-    console.log(`  sandbox=${sandbox.root}${retained ? ' (retained)' : ' (removed)'}`);
+    console.log(`  sandbox=${sandbox.root}${retained || deleteError ? ' (retained)' : ' (removed)'}`);
     console.log(`  transcript=${path.relative(repoRoot, manifest.transcript.path)} events=${manifest.transcript.events} toolCalls=${manifest.transcript.toolCalls}`);
     console.log(`  calls=${path.relative(repoRoot, manifest.calls.path)} total=${manifest.calls.total} rejected=${manifest.calls.rejected} outOfBounds=${manifest.calls.outOfBounds}`);
     console.log(`  created=${manifest.created.length} 条${manifest.created.length ? '：' + manifest.created.map((e) => e.id).join('、') : ''}`);

@@ -16,7 +16,7 @@ skill-tests/
 | 文件 | 作用 | 谁看 |
 |---|---|---|
 | `scenario.json` | `prompt`：用户原话，唯一给被测 agent 的文本输入 | 被测 agent |
-| `materials/` | 可选。用户原话里要引用的文件，整体复制进沙箱 | 被测 agent |
+| `materials/` | 可选。用户原话里要引用的文件，整体复制进运行目录的 `work/materials/` | 被测 agent |
 | `preset.mjs` | 可选。声明要建的任务，会话前由 harness 用真 CLI 执行 | 无 |
 | `assert.mjs` | 结局断言。默认导出 `{tasks, created, calls, session} => 结果数组` | 无 |
 
@@ -77,7 +77,7 @@ export default (projects) => [
 node harness/run.mjs --scenario <id>
 ```
 
-探针与 scenario 共用沙箱、会话、账本与可信度检查，分岔在取到终态快照之后：探针到此结束，不跑断言、也不清场（ADR-0015）。所以一次探针成功跑完的结论是 `sampled` 而不是 `passed`，退出码 0 只代表「这份样本可用」。
+探针与 scenario 共用运行目录、会话、账本与可信度检查，分岔在取到终态快照之后：探针到此结束，不跑断言、也不清场（ADR-0015）。所以一次探针成功跑完的结论是 `sampled` 而不是 `passed`，退出码 0 只代表「这份样本可用」。
 
 读完 `runs/<runId>/` 下的三件事实：
 
@@ -87,7 +87,7 @@ node harness/run.mjs --scenario <id>
 | `calls.ndjson` | 被测 agent 实际调了哪些 dida 命令，argv 是解析后的数组 |
 | `trace.ndjson` | agent 的完整步骤。只在需要看它为什么这么做时读 |
 
-探针永不清场，任务与沙箱都留在现场；确认完用 `--clean <runId>` 收尾。
+探针永不清场，任务与运行目录都留在现场；确认完用 `--clean <runId>` 收尾。
 
 ### 4. 据此写 `assert.mjs`
 

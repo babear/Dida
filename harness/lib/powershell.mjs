@@ -2,7 +2,7 @@
 // shim 那边拿到的是已解析的 argv 数组（guard.mjs 的 parseArgv），这里是字符串层，
 // 多一层切分：`;`、`&&`、`||`、`|`、`&`、`{`、`}`、换行都能把一条命令拆成多次调用。
 //
-// 只按命令名判 dida（`dida`、`dida.ps1`、`dida.cmd` 都算）：相对名命中沙箱 bin/ 的壳，
+// 只按命令名判 dida（`dida`、`dida.ps1`、`dida.cmd` 都算）：相对名命中运行目录 shim/ 的壳，
 // 带路径的是直调真 CLI（与 #13 的入口讨论一致）。
 export function didaInvocations(command, { shimDir = null } = {}) {
   const out = [];
@@ -38,7 +38,7 @@ export function didaInvocations(command, { shimDir = null } = {}) {
   return out;
 }
 
-// 裸名命中 PATH 上沙箱 bin/ 的壳；带路径的是直调——除非那路径就在沙箱 bin/ 里，
+// 裸名命中 PATH 上运行目录 shim/ 的壳；带路径的是直调——除非那路径就在那个 shim/ 里，
 // 那种仍是 shim 的壳，有日志（agent 可以写全名调它）。
 function didaInvocationKind(token, shimDir) {
   if (basenameWithoutExtension(token) !== 'dida') return null;

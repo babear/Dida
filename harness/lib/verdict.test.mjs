@@ -318,7 +318,7 @@ test('可信度失败（会话正常结束）时也不出现会话中断的措�
   assert.doesNotMatch(text, /会话在此终止/);
 });
 
-// 预设失败（#19）：这次 run 在建沙箱之前就停了，判定链无从开始。
+// 预设失败（#19）：这次 run 在建运行目录之前就停了，判定链无从开始。
 // 措辞要指向 preset.mjs，并点名账本还在、--clean 收得到。
 test('预设失败时报告说明没进入会话，并指向 preset.mjs', () => {
   const text = renderVerdict({

@@ -9,11 +9,15 @@
 _Avoid_: 技能、prompt、文档
 
 **Scenario**:
-一条可执行的测试用例，由用户原话、沙箱素材、可选预设和断言组成。一条 scenario 对应一个或多个已确认的 skill 缺陷。
+一条可执行的测试用例，由用户原话、运行目录素材、可选预设和断言组成。一条 scenario 对应一个或多个已确认的 skill 缺陷。
 _Avoid_: 测试、case、用例
 
+**运行目录**:
+每条 scenario 运行时在 `%TEMP%` 下建的一次性目录树，`run-<runId>/`。被测 agent 的 cwd 是它下面的 `work/`，skill、settings 与 shim 在同级的其它子目录里。**它不是隔离边界**：cwd 只决定相对路径的起点，文件系统其余部分仍可读写。
+_Avoid_: 沙箱、sandbox、隔离环境
+
 **被测 agent**:
-harness 为每条 scenario 启动的一次性 `claude -p` 子进程，它只能看到用户原话和沙箱素材。
+harness 为每条 scenario 启动的一次性 `claude -p` 子进程，它拿到的输入是用户原话和运行目录素材，此外没有别的提示。
 _Avoid_: 子 agent、测试 agent、worker
 
 **判定 agent**:
@@ -29,7 +33,7 @@ shim 记下的 `dida` 调用序列，`runs/<runId>/calls.ndjson`，每行一条 
 _Avoid_: 记录、shim 日志
 
 **工具面**:
-被测 agent 启动时被授予的工具名集合，由 `harness/agents.json` 定义。本项目的工具面是 `Skill`、`PowerShell`、`Read`、`Glob`、`Grep`、`Write`；**不含 `Bash`**——shim 没有 bash 形态，可信度检查只从 `PowerShell` 调用里找 dida 命令（见 #37）。
+被测 agent 启动时被授予的工具名集合，由 `harness/agents.json` 定义。本项目的工具面是 `Skill`、`PowerShell`、`Read`、`Glob`、`Grep`；**不含 `Bash`**——shim 没有 bash 形态，可信度检查只从 `PowerShell` 调用里找 dida 命令（见 #37）。**也不含 `Write`**——没有 scenario 需要写文件，而它能直接覆写越界防护的白名单（见 #16）。
 _Avoid_: 工具箱、权限、allowedTools（除非指命令行参数）
 
 **shell**:
@@ -45,12 +49,12 @@ _Avoid_: 版本、变体、入口
 _Avoid_: mock、桩、代理、wrapper
 
 **调用方标记**:
-每次运行追加到沙箱 skill 副本 `SKILL.md` 末尾的 `HARNESS-CALLER-MARKER-<runId>`，同时写入 manifest，用来证明被测 agent 读到的是沙箱副本而非全局软链接。
+每次运行追加到运行目录里的 skill 副本 `SKILL.md` 末尾的 `HARNESS-CALLER-MARKER-<runId>`，同时写入 manifest，用来证明被测 agent 读到的是运行目录里的副本而非全局软链接。
 _Avoid_: 水印、witness
 
 **测试清单**:
 `Test_1`（`69abc459ebbdbd00000009f0`）与 `Test_2`（`59f736cae4b060e424059e3b`）。所有写入必须落在其中之一。这份集合同时供 shim 判定越界写入与清场使用。
-_Avoid_: 沙箱清单、测试项目
+_Avoid_: 测试项目、测试库
 
 **账本**:
 `runs/<runId>/created.ndjson`，本 run 建成并**建一条即记一条**的任务记录（NDJSON，一行一条：`id` / `projectId` / `title`）。它是这条 scenario 的**唯一事实源**——断言读它，清场删它。清单里的其它任务不在这个视野里（见 ADR-0010）。
@@ -81,11 +85,11 @@ _Avoid_: 一致性检查、交叉校验
 _Avoid_: 评估、评价、评分（这些指「算但不计入判定」，已被 ADR-0014 取消）
 
 **预设**:
-建沙箱之前由 harness 直接对测试清单执行的建任务命令，用来造出 scenario 需要的前置数据。它在沙箱之外执行、不经 shim，建出的任务与 shim 记的走同一份账本。
+建运行目录之前由 harness 直接对测试清单执行的建任务命令，用来造出 scenario 需要的前置数据。它在运行目录之外执行、不经 shim，建出的任务与 shim 记的走同一份账本。
 _Avoid_: 初始化、fixture、setup
 
 **探针**:
-与 scenario 共用沙箱、账本、会话门与可信度检查的一次运行，取到终态快照即止——不判断言、不清场，结论只有 `sampled` / `incomplete` / `invalid`。放在 `skill-tests/probes/` 下，断言写好、用例搬进 `scenarios/` 之后源目录即删，运行现场按需用 `--clean` 收尾（见 ADR-0015）。
+与 scenario 共用运行目录、账本、会话门与可信度检查的一次运行，取到终态快照即止——不判断言、不清场，结论只有 `sampled` / `incomplete` / `invalid`。放在 `skill-tests/probes/` 下，断言写好、用例搬进 `scenarios/` 之后源目录即删，运行现场按需用 `--clean` 收尾（见 ADR-0015）。
 _Avoid_: 试验、试跑、probe 模式
 
 **终态快照**:
