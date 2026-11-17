@@ -1,4 +1,4 @@
-// 依据 2026-11-17 探针取样（run 2026-11-17T00-14-05-962Z-0f6249）：
+// 依据 2026-11-17 探针取样（runs/2026-11-17T01-25-37-814Z-7ed8fa）：
 // agent 建出的任务是 kind=CHECKLIST、5 条 items、说明写在 content、desc 不存在。
 // 断言按字段定位，不按顺序猜（skill-tests/README.md）。
 export default function assert({ tasks }) {

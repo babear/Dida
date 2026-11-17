@@ -382,3 +382,32 @@ test('没放 assert.mjs 的探针报告不出现这条提示', () => {
   const report = renderReport(probeManifest({ unusedAssert: false }));
   assert.doesNotMatch(report, /未被使用/);
 });
+
+// 报告必须能一眼看出这是探针还是正式用例（问题 1）：
+// 两者的标题与首行原本完全同构，不看 manifest 根本分不出。
+// 只查标题行——正文里本来就散落着「探针」「scenario」字样，查全文等于没查。
+function titleLineOf(manifest) {
+  return renderReport(manifest).split('\n').find((line) => line.startsWith('# '));
+}
+
+test('正式用例的标题行标出「scenario」，且不写「探针」', () => {
+  const title = titleLineOf({ ...MANIFEST, kind: 'scenario', assertion: { status: 'passed', results: [] } });
+  assert.match(title, /scenario/);
+  assert.doesNotMatch(title, /探针/);
+});
+
+test('探针的标题行标出「探针」', () => {
+  assert.match(titleLineOf(probeManifest()), /探针/);
+});
+
+test('探针标识出现在标题行，不用翻到摘要才看得到', () => {
+  const report = renderReport(probeManifest());
+  const titleLine = report.split('\n').find((line) => line.startsWith('# '));
+  assert.match(titleLine, /探针/);
+});
+
+test('正式用例标识同样出现在标题行', () => {
+  const report = renderReport({ ...MANIFEST, kind: 'scenario', assertion: { status: 'passed', results: [] } });
+  const titleLine = report.split('\n').find((line) => line.startsWith('# '));
+  assert.match(titleLine, /scenario/);
+});

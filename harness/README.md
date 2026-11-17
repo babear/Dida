@@ -18,7 +18,7 @@ npm run test:harness  # harness 自己的单元测试，不烧 API
 | `--settings <file>` | `~/.claude/settings.json` | 取 `ANTHROPIC_*` 键的来源 |
 | `--keep-sandbox` | 关 | 成功时也保留沙箱（失败时总是保留）。只管沙箱，不影响清场 |
 | `--hold` | 关 | 跑完不清场，留现场给人看；之后用 `--clean <runId>` 收尾 |
-| `--clean <runId>` | — | 只按该 run 的 `created.ndjson` 删除任务，然后退出 |
+| `--clean <runId>` | — | 只按该 run 的 `created.ndjson` 删除任务，然后退出。**不改写 `report.md`，也不覆盖 `manifest.cleanup`**——那份报告与当时的结论是那次运行的产物，收尾只把结果记到 `manifest.cleanupAfter` |
 
 退出码：任一 scenario 断言未通过、会话非零退出或超时、用例配置错误（缺 `assert.mjs`，或断言模块加载失败、没给出合法结果）、可信度检查不过（日志条数与轨迹对不上，或轨迹读不出）、终态快照取不到、清场中止或删除失败，都是 1。
 
@@ -83,6 +83,8 @@ npm run test:harness  # harness 自己的单元测试，不烧 API
 - 探针可以带 `preset.mjs`，校验规则与账本归属同 scenario。
 - 全量运行只扫 `scenarios/`，不碰 `probes/`；跑完时 `probes/` 非空会在汇总末尾提醒清理。
 - 同名时正式用例优先：`scenarios/<id>` 赢过 `probes/<id>`。
+- **跑前清场**：开跑某条用例之前，若它上一次的 run 没清场，先按那份账本清一遍。探针不清场是设计，留下的任务会让下一次运行的 agent 看到同名任务就不再新建，取样直接失真（2026-11-17 实际发生过）。
+- **报告标题行标明身份**：`# 探针 <id> · <run>` 与 `# scenario <id> · <run>`，不用翻 manifest 就能分清。
 
 `listScenarios` 只扫 `skill-tests/scenarios/`，仓库根的旧 `scenarios/` 已不再读取。
 

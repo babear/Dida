@@ -62,6 +62,13 @@ function headingFor(kind) {
   return kind === 'probe' ? SAMPLE_HEADING : VERDICT_HEADING;
 }
 
+// 标题行必须自报身份：探针与正式用例的产出原本完全同构，
+// 不看 manifest 根本分不出这份报告是哪条路径跑的。
+export function runTitle(manifest) {
+  const label = manifest.kind === 'probe' ? '探针' : 'scenario';
+  return `# ${label} ${manifest.scenario} · ${manifest.run}`;
+}
+
 // broken 与 invalid 的报告形状一样：一句标题、一句原因、可选的失败项明细。
 // 区别只在措辞指向「改用例」还是「查原因」。
 function detailBlock(title, detail, results, heading = VERDICT_HEADING) {
@@ -195,7 +202,7 @@ export function renderReport(manifest) {
   const ranSession = manifest.session && Object.keys(manifest.session).length > 0;
   if (!ranSession) {
     return [
-      `# ${manifest.scenario} · ${manifest.run}`,
+      runTitle(manifest),
       '',
       renderVerdict({ assertion: manifest.assertion, kind: manifest.kind }),
     ].join('\n');
@@ -203,7 +210,7 @@ export function renderReport(manifest) {
   // 首行就是三个事实，人打开报告第一眼就能回答"测的是哪份 skill、哪个模型、沙箱在哪"。
   const lines = [
     renderHeader(manifest),
-    `# ${manifest.scenario} · ${manifest.run}`,
+    runTitle(manifest),
     '',
     '## 本次创建的任务',
     '',

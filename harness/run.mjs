@@ -382,8 +382,66 @@ function safeStringify(value) {
   }
 }
 
+// 跑前清场：找到同一条用例**最近一次**未清场的 run（问题 3）。
+// 探针不清场是设计（ADR-0015），代价是同一条用例重跑时上一次的任务还在清单里——
+// agent 看到同名任务就不再新建，取样直接失真。所以开跑前按上一次的账本清一遍。
+//
+// 只认最近的那条，不回头找更早的：更早的现场可能已被人看过、留作证据。
+// 最近那条已经清过场就什么都不做。
+//
+// 「清过没有」要看 `cleanupAfter`，不是 `cleanup`：后者是运行当时的结论，
+// 会一直写着 deferred（收尾不覆盖它）。只看 cleanup 会让人每跑一次都重清一遍。
+export function previousRunOf(repoRoot, id) {
+  const runsDir = path.join(repoRoot, 'runs');
+  if (!fs.existsSync(runsDir)) return null;
+
+  const candidates = [];
+  for (const entry of fs.readdirSync(runsDir, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const runDir = path.join(runsDir, entry.name);
+    const manifestPath = path.join(runDir, 'manifest.json');
+    if (!fs.existsSync(manifestPath)) continue;
+    let manifest;
+    try {
+      manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    } catch {
+      continue;
+    }
+    if (manifest.scenario !== id) continue;
+    candidates.push({ runDir, manifest, name: entry.name });
+  }
+  if (candidates.length === 0) return null;
+
+  // runId 是 ISO 时间戳打头，按名倒序即按时间倒序。
+  candidates.sort((a, b) => b.name.localeCompare(a.name));
+  const latest = candidates[0];
+  if (!latest.manifest.cleanup?.deferred) return null;
+  if (latest.manifest.cleanupAfter) return null;
+  return { runDir: latest.runDir, scenario: latest.manifest.scenario, manifest: latest.manifest };
+}
+
 export function writeManifest(runDir, manifest) {
   fs.writeFileSync(path.join(runDir, 'manifest.json'), safeStringify(manifest));
+}
+
+// 事后收尾：只按账本删任务，并把**收尾自己的结果**记进 manifest。
+//
+// 三条约束（缺一不可）：
+// 1. **不重写 report.md**——它是那次运行的产物，`--clean` 是事后的动作。
+//    之前这里会 writeReport，探针的「未清场」于是被改写成「按账本删除 1 条」，
+//    读报告的人会以为探针自己清了场。
+// 2. **不覆盖 `cleanup`**——那是运行当时的结论（例如 `deferred: true` 表示没清场）。
+//    覆盖它等于篡改历史：事后没人能看出那次到底留没留现场。
+// 3. 收尾结果另记在 `cleanupAfter`，与运行时的事实各归各位。
+export function finishRun({ runDir, projects, dida }) {
+  const createdFile = path.join(runDir, 'created.ndjson');
+  const manifestPath = path.join(runDir, 'manifest.json');
+  const manifest = fs.existsSync(manifestPath)
+    ? JSON.parse(fs.readFileSync(manifestPath, 'utf8'))
+    : {};
+  const cleanup = cleanRun({ dida, projects: manifest.testProjects ?? projects, createdFile });
+  writeManifest(runDir, { ...manifest, cleanupAfter: cleanup });
+  return cleanup;
 }
 
 function writeReport(runDir, manifest) {
@@ -438,14 +496,7 @@ async function main() {
     }
     const manifestPath = path.join(runDir, 'manifest.json');
     const manifest = fs.existsSync(manifestPath) ? JSON.parse(fs.readFileSync(manifestPath, 'utf8')) : {};
-    const cleanup = cleanRun({
-      dida: realDida(),
-      projects: manifest.testProjects ?? projects,
-      createdFile: path.join(runDir, 'created.ndjson'),
-    });
-    const updated = { ...manifest, cleanup };
-    writeManifest(runDir, updated);
-    writeReport(runDir, updated);
+    const cleanup = finishRun({ runDir, projects: manifest.testProjects ?? projects, dida: realDida() });
     reportCleanup(cleanup);
     if (hasCleanupProblem(cleanup)) process.exitCode = 1;
     return;
@@ -511,6 +562,24 @@ async function main() {
 
     const notice = probeAssertNotice(scenario);
     if (notice) console.log(notice);
+
+    // 跑前清场（问题 3）：上一次这条用例没清场的话，它建的任务还留在清单里，
+    // agent 看到同名任务就不再新建，取样直接失真。按上一次的账本先清一遍。
+    // 只清同 id 的最近一条——别的用例的现场不归这次管。
+    const previous = previousRunOf(repoRoot, id);
+    if (previous) {
+      try {
+        const stale = finishRun({
+          runDir: previous.runDir,
+          projects,
+          dida: realDida(),
+        });
+        console.log(`  cleanup 上一次运行 ${path.basename(previous.runDir)}：删掉 ${stale.deleted.length} 条残留任务`);
+        if (hasCleanupProblem(stale)) console.error('    上一次的收尾没干净，本次取样可能受影响');
+      } catch (error) {
+        console.error(`    上一次运行 ${path.basename(previous.runDir)} 的收尾失败：${error.message}`);
+      }
+    }
 
     const { run, runDir, sandbox, manifest, session, createdFile } = await runOne(options, scenario, projects, assertionFn);
     const completed = sessionCompleted(session);
