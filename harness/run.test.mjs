@@ -361,3 +361,31 @@ test('前置不改动传入的对象', () => {
   withPrependedPath(source, 'C:\\bin');
   assert.deepEqual(source, { Path: 'C:\\Windows' });
 });
+
+// 空轨迹与全是垃圾行，指引相反：前者是 CLI 没吐出东西（重跑），
+// 后者是解析器/harness 缺陷（重跑没用）。同归「无法判定」，但要说清是哪种（#18 移交的第 4 条）。
+test('credibilityOf：空轨迹与全是垃圾行的 detail 指向不同的下一步', () => {
+  const empty = credibilityOf({ calls: [], toolCalls: [], events: [] });
+  const garbage = credibilityOf({
+    calls: [],
+    toolCalls: [],
+    events: [{ type: 'unparseable', raw: 'x' }, { type: 'unparseable', raw: 'y' }],
+  });
+  assert.equal(empty.status, 'indeterminate');
+  assert.equal(garbage.status, 'indeterminate');
+  assert.match(empty.detail, /重跑/);
+  assert.match(garbage.detail, /重跑没用/);
+  assert.notEqual(empty.detail, garbage.detail);
+});
+
+// 沙箱 bin/ 里的 dida.cmd 是 shim 的壳：写全名调它有日志，不能判成绕过。
+test('credibilityOf：沙箱 bin 下的全名调用算 shim，不算绕过', () => {
+  const sandboxBin = 'C:\Temp\run-abc123\bin';
+  const out = credibilityOf({
+    calls: [{ argv: ['task', 'get'] }],
+    toolCalls: [{ name: 'PowerShell', input: { command: `${sandboxBin}\dida.cmd task get` } }],
+    events: [{ type: 'assistant' }],
+    shimDir: sandboxBin,
+  });
+  assert.equal(out.status, 'consistent', JSON.stringify(out));
+});

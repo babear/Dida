@@ -24,14 +24,14 @@ export function appendCall(callLogPath, record) {
 }
 
 // 调用日志与轨迹互为校验：shim 每转发一次记一条，轨迹里每一次 dida 调用都该有对应。
-// 判据是**逐调用比对命令内容**，不比条数（#18）：条数比抓不到「3 次调用里 1 次绕过、
-// 另 2 次各跑 2 条 dida」——总数反多，`logged >= shapeCalls` 仍成立。反过来，
-// 工具面没有 Bash，agent 的任何文件操作都必须走 PowerShell，条数比会把它们算进分母，
+// 判据是**逐调用比对命令内容**，不比条数（#18）：比条数抓不到「3 次调用里 1 次绕过、
+// 另 2 次各跑 2 条 dida」——总数反多，仍会判成够。反过来，工具面没有 Bash，
+// agent 的任何文件操作都必须走 PowerShell，比条数会把它们算进分母，
 // 一次 Get-ChildItem 就足以让一次真实回归变成什么结论都拿不到（ADR-0014 后果）。
 //
 // 被拒绝的调用也算一条——它确实发生过，只是没转发。
-export function crossCheck(calls, toolCalls) {
-  const checked = compareInvocations(toolCalls, calls);
+export function crossCheck(calls, toolCalls, options = {}) {
+  const checked = compareInvocations(toolCalls, calls, options);
   return {
     status: checked.status,
     unmatched: checked.unmatched,

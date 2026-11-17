@@ -113,8 +113,8 @@ export function retainedSummaryLines(entries) {
 //
 // 只产出 status / detail / 统计，不产出 consistent 布尔：三态里「无从判定」时
 // 旧布尔可能为真，与 status 相反，留在 manifest 里会误导读者。
-export function credibilityOf({ calls, toolCalls, events }) {
-  const checked = crossCheck(calls, toolCalls);
+export function credibilityOf({ calls, toolCalls, events, shimDir = null }) {
+  const checked = crossCheck(calls, toolCalls, { shimDir });
   const transcriptUsable = events.some((event) => event.type !== 'unparseable');
   const status = crossCheckStatus(checked, { transcriptUsable });
   return {
@@ -127,7 +127,13 @@ export function credibilityOf({ calls, toolCalls, events }) {
 }
 
 function credibilityDetail({ status, checked, events, transcriptUsable }) {
-  if (!transcriptUsable) return `轨迹 ${events.length} 条事件，没有一条能解析`;
+  // 「一条事件都没有」与「有事件但全是垃圾」的指引相反：前者大概率是 CLI 没吐出东西、
+  // 重跑能好；后者是解析器或 harness 的缺陷，重跑没用（#18 移交的第 4 条）。
+  if (!transcriptUsable) {
+    return events.length === 0
+      ? '轨迹里一条事件都没有（CLI 可能一启动就崩了），重跑一次'
+      : `轨迹 ${events.length} 条事件，没有一条能解析（查解析器/harness，重跑没用）`;
+  }
   if (status === 'consistent') return '轨迹里的 dida 调用在日志里都有对应';
   if (status === 'indeterminate') {
     return checked.reason === 'unparsed'
@@ -267,7 +273,13 @@ async function runOne(options, scenario, projects, assertionFn) {
   // 「早于清场」由这里的位置保证：判定链返回之后才开始清场。
   const completed = sessionCompleted(session);
   const statePath = path.join(runDir, 'state.json');
-  const credibility = credibilityOf({ calls, toolCalls: summary.toolCalls, events });
+  const credibility = credibilityOf({
+    calls,
+    toolCalls: summary.toolCalls,
+    events,
+    // 沙箱 bin/ 下的 dida.cmd 也是 shim 的壳，写全名调它有日志，不是绕过。
+    shimDir: sandbox.binDir,
+  });
   const assertion = await decideAssertion({
     completed,
     crossCheck: credibility,

@@ -207,6 +207,10 @@ export function renderReport(manifest) {
   lines.push(`- 退出码 ${manifest.session?.exitCode ?? 'unknown'}${manifest.session?.timedOut ? '（超时）' : ''}`);
   lines.push(`- ${manifest.session?.turns ?? '?'} 轮，$${cost(manifest.session?.costUsd)}`);
   lines.push(`- 调用日志 ${manifest.calls?.path ?? '-'}（${manifest.calls?.total ?? 0} 条）`);
+  // 判据点名了哪几次调用没对上之后，读者需要轨迹才能自己核对（#18 移交的第 3 条）。
+  if (manifest.transcript?.path) {
+    lines.push(`- 轨迹 ${manifest.transcript.path}（${manifest.transcript.events ?? 0} 条事件，${manifest.transcript.toolCalls ?? 0} 次工具调用）`);
+  }
   if (manifest.calls?.rejected) {
     const outOfBounds = manifest.calls.outOfBounds ?? 0;
     const other = manifest.calls.rejected - outOfBounds;

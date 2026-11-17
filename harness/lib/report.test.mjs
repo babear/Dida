@@ -283,3 +283,12 @@ test('旧 manifest 的 skipped（incomplete 的旧名）保留现场理由与 in
   assert.match(text, /会话没正常结束/);
   assert.doesNotMatch(text, /没有自动清场/);
 });
+
+// 可信度判据点名了哪几次调用没对上，读者需要轨迹路径自己去核对（#18 移交的第 3 条）。
+test('报告给出轨迹路径，可信度结论才有可核对的证据来源', () => {
+  const text = renderReport({
+    ...MANIFEST,
+    transcript: { path: 'C:/runs/x/trace.ndjson', events: 12, toolCalls: 4 },
+  });
+  assert.match(text, /轨迹 C:\/runs\/x\/trace\.ndjson/);
+});

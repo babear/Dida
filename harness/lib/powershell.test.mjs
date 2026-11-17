@@ -132,7 +132,18 @@ test('dida 只作为别的命令的参数出现时，不算调用', () => {
 });
 
 test('& $cmd 这类动态调用解析不了时仍报无法判定，而不是当作没调用', () => {
-  assert.deepEqual(didaInvocations('& $cmd task create'), [{ kind: 'unparsed' }]);
+  assert.deepEqual(didaInvocations('$cmd = "dida"; & $cmd task create'), [{ kind: 'unparsed' }]);
+});
+
+// #18 第二条评论的边界：「解析失败报无法判定」只针对命令里出现了 dida 的情形。
+// 与 dida 无关的动态调用（`& $env:ComSpec /c dir`）不该把整条运行判成无法判定。
+test('与 dida 无关的动态调用不报无法判定', () => {
+  assert.deepEqual(didaInvocations('& $env:ComSpec /c dir'), []);
+});
+
+test('反引号续行不断命令，也不把反引号当参数', () => {
+  const command = ['dida task create `', '  --title x'].join('\n');
+  assert.deepEqual(didaInvocations(command), [{ kind: 'shim', argv: ['task', 'create', '--title', 'x'] }]);
 });
 
 // 误报比漏报更贵：ADR-0014 下可信度误报会让整条运行连快照都不取，
@@ -241,4 +252,25 @@ test('argv 里的变量不逐字比，改为按条数认领日志', () => {
 test('argv 带变量但日志里一条都没有时仍判不一致', () => {
   const out = compareInvocations([ps('dida task get inbox $task.id')], []);
   assert.equal(out.status, 'inconsistent');
+});
+
+// 沙箱 bin/ 里的 dida.cmd 是 shim 的壳，写绝对路径也能命中它（PATH 之外的全名调用）。
+// 那种调用有日志，不是绕过；判据得知道沙箱目录才能区分。
+test('沙箱 bin 下的绝对路径仍是 shim，不是绕过', () => {
+  const sandboxBin = String.raw`C:\Temp\run-abc123\bin`;
+  const out = compareInvocations(
+    [ps(String.raw`C:\Temp\run-abc123\bin\dida.cmd task get inbox a`)],
+    [{ argv: ['task', 'get', 'inbox', 'a'] }],
+    { shimDir: sandboxBin },
+  );
+  assert.equal(out.status, 'consistent', JSON.stringify(out));
+});
+
+test('沙箱以外的绝对路径仍是绕过', () => {
+  const out = compareInvocations(
+    [ps(String.raw`C:\other\dida.cmd task get inbox a`)],
+    [{ argv: ['task', 'get', 'inbox', 'a'] }],
+    { shimDir: String.raw`C:\Temp\run-abc123\bin` },
+  );
+  assert.equal(out.status, 'inconsistent', JSON.stringify(out));
 });

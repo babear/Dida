@@ -4,8 +4,11 @@
 //
 // 只按命令名判 dida（`dida`、`dida.ps1`、`dida.cmd` 都算）：相对名命中沙箱 bin/ 的壳，
 // 带路径的是直调真 CLI（与 #13 的入口讨论一致）。
-export function didaInvocations(command) {
+export function didaInvocations(command, { shimDir = null } = {}) {
   const out = [];
+  // `& $cmd task create` 里的 `$cmd` 展开成什么只有同一条命令里的赋值知道。
+  // 整条命令没提过 dida 就多半与 dida 无关（`& $env:ComSpec /c dir`），不必报无法判定。
+  const mentionsDida = /\bdida\b/i.test(command);
   for (const segment of splitSegments(command)) {
     const tokens = tokenize(segment.text);
     if (tokens.length === 0) continue;
@@ -16,26 +19,37 @@ export function didaInvocations(command) {
       const eqAt = segment.text.indexOf('=');
       const rhsText = segment.text.slice(eqAt + 1).trim();
       if (rhsText === '' || /^[$"']/.test(rhsText)) continue;
-      const kind = didaInvocationKind(tokens[2]);
+      const kind = didaInvocationKind(tokens[2], shimDir);
       if (kind) out.push({ kind, argv: stopAtRedirection(tokens.slice(3)) });
       continue;
     }
-    const kind = didaInvocationKind(tokens[0]);
+    const kind = didaInvocationKind(tokens[0], shimDir);
     if (kind) {
       out.push({ kind, argv: stopAtRedirection(tokens.slice(1)) });
       continue;
     }
     // `& $cmd ...` 这种动态调用：命令名是变量，解析不出跑没跑，要报无法判定。
     // 判据是这段紧跟在调用运算符 `&` 后面；`$r` 单独一行只是求值打印，不是调用。
-    if (segment.invoked && /^[$&(]/.test(tokens[0])) out.push({ kind: 'unparsed' });
+    // 整条命令没提过 dida 时按无关命令略过（`& $env:ComSpec /c dir`，见 #18 第二条评论）。
+    if (mentionsDida && segment.invoked && /^[$&(]/.test(tokens[0])) {
+      out.push({ kind: 'unparsed' });
+    }
   }
   return out;
 }
 
-// 裸名命中 PATH 上沙箱 bin/ 的壳；带路径分隔符的是直调真 CLI，shim 记不到。
-function didaInvocationKind(token) {
+// 裸名命中 PATH 上沙箱 bin/ 的壳；带路径的是直调——除非那路径就在沙箱 bin/ 里，
+// 那种仍是 shim 的壳，有日志（agent 可以写全名调它）。
+function didaInvocationKind(token, shimDir) {
   if (basenameWithoutExtension(token) !== 'dida') return null;
-  return /[\\/]/.test(token) ? 'bypass' : 'shim';
+  if (!/[\\/]/.test(token)) return 'shim';
+  if (shimDir && inDir(token, shimDir)) return 'shim';
+  return 'bypass';
+}
+
+function inDir(filePath, dir) {
+  const norm = (value) => value.replace(/[\\/]+/g, '\\').replace(/\\+$/, '').toLowerCase();
+  return norm(filePath).startsWith(`${norm(dir)}\\`);
 }
 
 function basenameWithoutExtension(token) {
@@ -50,7 +64,7 @@ function basenameWithoutExtension(token) {
 // 第二遍就是没对上——全量配对会把这一次的缺口藏在重复项里。
 // 日志里多出来的条目不算缺口：shim 只在调用发生时追加，多记说明有次调用没进轨迹
 // （例如会话在写轨迹前被杀），那不是绕过。
-export function compareInvocations(toolCalls, log) {
+export function compareInvocations(toolCalls, log, { shimDir = null } = {}) {
   if (!Array.isArray(log)) return { status: 'indeterminate', unmatched: [], reason: 'no-log' };
   const remaining = log.filter((entry) => !entry.unparseable).map((entry) => entry.argv ?? []);
   const unmatched = [];
@@ -62,7 +76,7 @@ export function compareInvocations(toolCalls, log) {
     if (typeof command !== 'string') {
       return { status: 'indeterminate', unmatched, reason: 'no-command' };
     }
-    for (const invocation of didaInvocations(command)) {
+    for (const invocation of didaInvocations(command, { shimDir })) {
       if (invocation.kind === 'unparsed') {
         return { status: 'indeterminate', unmatched, reason: 'unparsed' };
       }
@@ -134,6 +148,16 @@ function splitSegments(command) {
     if (ch === '#') {
       while (i < command.length && command[i] !== '\n' && command[i] !== '\r') i += 1;
       push();
+      continue;
+    }
+    // 反引号是 PowerShell 的续行 / 转义符：`` ` `` 在行尾表示下一行接着写，
+    // 不是参数的一部分。行尾反引号直接丢掉，换行不切段。
+    if (ch === '`') {
+      const next = command[i + 1];
+      if (next === '\n') { i += 1; current += ' '; continue; }
+      if (next === '\r') { i += 2; current += ' '; continue; }
+      // 转义下一个字符：`n 是换行之类的转义序列不在命令名判断范围内，原样留下字符
+      if (next !== undefined) { current += next; i += 1; }
       continue;
     }
     // 换行也是命令分隔符：agent 常用多行写命令，不切会把下一行整个当成本行的参数——
