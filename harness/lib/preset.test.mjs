@@ -132,6 +132,46 @@ test('元素不是字符串数组时拒绝', () => {
   }
 });
 
+// 账本只记得下 task create 建出的 id（created.mjs 的 isCreateCall）。放行别的写命令
+// 等于让它改了真实数据而清场看不见——`project delete <测试清单>` 会删掉整份清单且无从收尾。
+test('只支持 task create：其它写命令一律拒绝', () => {
+  const commands = [
+    ['project', 'delete', P1],
+    ['project', 'update', P1, '--name', 'x'],
+    ['project', 'column', 'create', P1, '--name', '列'],
+    ['task', 'complete', P1, 't1'],
+    ['task', 'delete', P1, 't1'],
+    ['task', 'move', '--from', P1, '--to', P2, '--task', 't1'],
+    ['task', 'assign', '--project', P1, '--task', 't1', '--assignee', 'u'],
+  ];
+  for (const argv of commands) {
+    const out = checkPreset([argv], PROJECTS);
+    assert.equal(out.ok, false, `${argv.join(' ')} 不该放行`);
+    assert.ok(['unsupported-command', 'task-pointer'].includes(out.reason), `${argv.join(' ')} 的原因：${out.reason}`);
+  }
+});
+
+test('拒绝非 task create 时指名是哪个命令，并说明账本记不下', () => {
+  const out = checkPreset([['project', 'delete', P1]], PROJECTS);
+  assert.equal(out.reason, 'unsupported-command');
+  assert.match(out.detail, /project delete/);
+  assert.match(out.detail, /task create/);
+  assert.match(out.detail, /清不回来|账本/);
+});
+
+// 先报越界再报指针：越界的清单 id 是作者最容易修的错，而越界的命令往往同时带着
+// 任务指针，先报指针会把人引向错误的修法（去删 --parent-id 而不是改清单 id）。
+test('清单越界先于任务指针被报出来', () => {
+  const out = checkPreset([['task', 'complete', BLACK, 't1']], PROJECTS);
+  assert.equal(out.reason, 'out-of-bounds', JSON.stringify(out));
+  assert.match(out.detail, new RegExp(BLACK));
+});
+
+test('清单合法的任务指针仍报 task-pointer，不被越界判据吃掉', () => {
+  const out = checkPreset([['task', 'complete', P1, 't1']], PROJECTS);
+  assert.equal(out.reason, 'task-pointer');
+});
+
 // ─────────────────────────────────────────────────────────────────────────
 // 任务指针：ADR-0012 的完整表。出现即拒绝，不看它指向的任务在不在本 run 账本里。
 // 位置参数按 0 基计，与 guard.mjs 的 positionalAt 一致。

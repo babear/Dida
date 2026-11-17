@@ -37,17 +37,42 @@ const TASK_POINTERS = {
 
 const COMMAND_PATHS = Object.keys(TASK_POINTERS).map((commandPath) => commandPath.split(' '));
 
+// 认得出来的写命令路径，只用于把「不支持这类命令」的报错写准。
+// 不参与判定：判定顺序见 checkOne。
+const KNOWN_WRITE_PATHS = [
+  ['task', 'create'], ['task', 'update'], ['task', 'move'], ['task', 'complete'],
+  ['task', 'delete'], ['task', 'comment', 'add'], ['task', 'comment', 'delete'],
+  ['task', 'assign'], ['task', 'unassign'], ['task', 'complete-batch'],
+  ['project', 'create'], ['project', 'update'], ['project', 'delete'],
+  ['project', 'group', 'create'], ['project', 'group', 'update'], ['project', 'group', 'delete'],
+  ['project', 'column', 'create'], ['project', 'column', 'update'],
+  ['habit', 'create'], ['habit', 'update'], ['habit', 'checkin'],
+  ['focus', 'create'], ['focus', 'update'], ['focus', 'delete'],
+  ['tag', 'create'], ['tag', 'update'], ['tag', 'rename'], ['tag', 'delete'],
+  ['auth', 'login'], ['auth', 'logout'], ['auth', 'token'],
+];
+
 const maybeOption = (arg) => arg.length > 1 && arg[0] === '-';
 
 // 命令路径取 argv 前若干段里能匹配上的最长一条（task comment add 比 task comment 长）。
-// 与 guard.mjs 的 matchLongest 同一判据：跳过选项与其值之外的 token 比较。
-function commandPathOf(argv) {
+// 与 guard.mjs 的 matchLongest 同一判据：跳过选项再逐段比。
+function longestMatch(paths, argv) {
   const tokens = argv.filter((arg) => !maybeOption(arg));
-  const match = COMMAND_PATHS
+  const match = paths
     .map((candidate) => ({ candidate, hits: candidate.every((part, i) => tokens[i] === part) }))
     .filter((entry) => entry.hits)
     .sort((a, b) => b.candidate.length - a.candidate.length)[0];
   return match ? match.candidate.join(' ') : null;
+}
+
+// 有任务指针的命令路径（用于 pointerOf 的查表）。
+function commandPathOf(argv) {
+  return longestMatch(COMMAND_PATHS, argv);
+}
+
+// 报错措辞用的命令名：先认写命令，认不出再退回指针表。
+function writePathOf(argv) {
+  return longestMatch(KNOWN_WRITE_PATHS, argv) ?? commandPathOf(argv);
 }
 
 function pointerOf(commandPath, parsed) {
@@ -64,14 +89,26 @@ function pointerOf(commandPath, parsed) {
 }
 
 // 一条命令能不能出现在 preset 里。**顺序**是有意的：
-//   1. 先判任务指针，再判清单越界——指针是更明确的「不支持的用法」，
-//      报它比报边界更能让人知道该改什么。
-//   2. decide 放行但 targets 为空（--help、裸命令组、只读命令）判 empty：
+//   1. 清单越界最先报：它是作者最常见也最容易修的错（写错了清单 id），
+//      而越界的命令往往同时还带着任务指针，先报指针会把人引向错误的修法。
+//   2. 再判任务指针。ADR-0012 的表，出现即拒绝。
+//   3. 只允许 `task create`：**账本只记得下 task create 建出的 id**
+//      （created.mjs 的 isCreateCall）。放行别的写命令等于让它改了真实数据
+//      而清场看不见——`project delete <测试清单>` 会删掉整份清单且无从收尾。
+//   4. decide 放行但 targets 为空（--help、裸命令组、只读命令）判 empty：
 //      放行等于静默空跑，预设什么都没建却让用例照常跑下去。
-//   3. 无目标写命令（project create 等）判 no-target 并说明不支持。
+//   5. 无目标写命令（project create 等）判 no-target 并说明不支持。
 function checkOne(argv, projects) {
   const parsed = parseArgv(argv);
   const commandPath = commandPathOf(argv);
+  const verdict = decide(argv, projects);
+
+  if (!verdict.allow && verdict.reason === 'out-of-bounds') {
+    return {
+      reason: 'out-of-bounds',
+      detail: `预设的目标清单不在本次清单集合内：${argv.join(' ')}。越界的是 ${verdict.targets.join('、')}`,
+    };
+  }
 
   if (commandPath) {
     const pointer = pointerOf(commandPath, parsed);
@@ -80,7 +117,6 @@ function checkOne(argv, projects) {
     }
   }
 
-  const verdict = decide(argv, projects);
   if (verdict.allow) {
     if (verdict.targets.length === 0) {
       return {
@@ -88,19 +124,23 @@ function checkOne(argv, projects) {
         detail: `预设里的命令不产生任何写入：${argv.join(' ')}（--help、裸命令组与只读命令都不算造数据）`,
       };
     }
+    // 只有 task create 的产物能被记账、被清场收回。其余写命令（project update /
+    // project delete / column create …）decide 只看清单目标，拦得住越界却记不了账。
+    if (commandPath !== 'task create') {
+      return {
+        reason: 'unsupported-command',
+        detail: `预设只支持 task create，不支持 ${writePathOf(argv) ?? argv.join(' ')}：`
+          + '账本只记得下 task create 建出的任务 id，别的写命令改了真实数据却清不回来。',
+      };
+    }
     return null;
   }
+
   if (verdict.reason === 'no-target') {
     return {
       reason: 'no-target',
       detail: `预设不支持无目标写命令：${argv.join(' ')}。建清单类的前置数据会突破测试清单集合的边界；`
         + '需要新清单时先手工建好，把它加进测试清单集合。',
-    };
-  }
-  if (verdict.reason === 'out-of-bounds') {
-    return {
-      reason: 'out-of-bounds',
-      detail: `预设的目标清单不在本次清单集合内：${argv.join(' ')}。越界的是 ${verdict.targets.join('、')}`,
     };
   }
   return { reason: verdict.reason, detail: `预设里的命令被拒绝（${verdict.reason}）：${argv.join(' ')}` };

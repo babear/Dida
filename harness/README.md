@@ -63,7 +63,7 @@ npm run test:harness  # harness 自己的单元测试，不烧 API
 `preset.mjs` 的三条硬规则：
 
 1. **默认导出一个函数**，harness 把本次清单传进去：`export default (projects) => [['task', 'create', '--project', projects[0], '--title', '买气罐']]`。
-2. **整体校验先于执行**：任一条越界、指向已有任务、或是空操作（`--help`、裸命令组、只读命令）就拒绝该 run，一条都不执行、不建沙箱、不进入会话。
+2. **整体校验先于执行**：任一条越界、指向已有任务、不是 `task create`、或是空操作（`--help`、裸命令组、只读命令）就拒绝该 run，一条都不执行、不建沙箱、不进入会话。只放行 `task create` 是因为账本只记得下它建出的任务 id——别的写命令改了真实数据却清不回来。
 3. **失败不清场**：建出的任务留在 `runs/<runId>/created.ndjson`，用 `--clean <runId>` 收尾。预设只造数据结构，不造语义提示。
 
 `assert.mjs` 返回 `{ok, name, expected, actual}[]`，空数组即通过。它按**字段**定位任务（`childIds.length === 5`、`kind === 'TEXT'`），不按顺序猜。`created` 条目带 `origin: 'preset' | 'agent'`。

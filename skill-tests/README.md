@@ -61,6 +61,7 @@ export default (projects) => [
 
 - **清单从参数拿，不要 import 默认常量。** 本次 run 的清单可能被环境变量覆盖，用默认常量会建到清场的视野外，成为删不掉的孤儿。
 - **不能指向已有任务。** `--parent-id`、`task update --id`、`task delete`、`task move --task`、`comment add` 指向的任务不在账本里，写错就改到账本之外的数据。preset 里出现这类参数会被拒绝，等占位符方案落地后才放开。
+- **只支持 `task create`。** 账本记得下、清场收得回的只有它建出的任务 id。别的写命令（`project update`、`project delete`、`project column create` …）改了真实数据却记不了账，一律拒绝。
 - **不能是空操作。** `--help`、裸命令组、只读命令这类 argv 什么都不建，会被判为错误而不是静默通过。
 - **不支持无目标写命令**（`project create` 等）：建清单会突破测试清单集合的边界。需要新清单时先手工建好，再加进 `DIDA_TEST_PROJECTS`。
 - 目标清单必须 ∈ 本次清单集合，越界拒绝该 run。

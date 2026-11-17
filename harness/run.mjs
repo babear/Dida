@@ -264,7 +264,6 @@ async function runOne(options, scenario, projects, assertionFn) {
         // 失败时会渲染成 `# scenario …`（README「报告标题行标明身份」）。
         kind: scenario.kind,
         skill: { source: options.skillPath },
-        preset: { status: 'failed', detail: error.message, reason: error.reason ?? null },
         assertion: { status: 'preset-failed', detail: error.message, results: [] },
         created: readCreated(createdFile),
         calls: {},
@@ -469,7 +468,14 @@ export function previousRunOf(repoRoot, id) {
   // runId 是 ISO 时间戳打头，按名倒序即按时间倒序。
   candidates.sort((a, b) => b.name.localeCompare(a.name));
   const latest = candidates[0];
-  if (!latest.manifest.cleanup?.deferred) return null;
+  // 预设失败的 run 没有 cleanup 字段（它没走到清场那一步），但它建的预设任务
+  // 确实还留在清单里，同样会让下一条用例的 agent 看到同名任务不再新建。
+  // 账本按 runId 隔离，用 finishRun 收它不会碰别的 run。
+  // 一条都没建出来时不必收：清它只会写下空的 cleanupAfter，白跑一次枚举。
+  const presetLeftover = latest.manifest.assertion?.status === 'preset-failed'
+    && readCreated(path.join(latest.runDir, 'created.ndjson')).length > 0;
+  const leftBehind = latest.manifest.cleanup?.deferred || presetLeftover;
+  if (!leftBehind) return null;
   if (latest.manifest.cleanupAfter) return null;
   return { runDir: latest.runDir, scenario: latest.manifest.scenario, manifest: latest.manifest };
 }
