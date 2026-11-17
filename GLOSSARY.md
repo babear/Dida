@@ -17,7 +17,7 @@ _Avoid_: 测试、case、用例
 _Avoid_: 沙箱、sandbox、隔离环境
 
 **被测 agent**:
-harness 为每条 scenario 启动的一次性 `claude -p` 子进程，它只能看到用户原话和运行目录素材。
+harness 为每条 scenario 启动的一次性 `claude -p` 子进程，它拿到的输入是用户原话和运行目录素材，此外没有别的提示。
 _Avoid_: 子 agent、测试 agent、worker
 
 **判定 agent**:
@@ -54,7 +54,7 @@ _Avoid_: 水印、witness
 
 **测试清单**:
 `Test_1`（`69abc459ebbdbd00000009f0`）与 `Test_2`（`59f736cae4b060e424059e3b`）。所有写入必须落在其中之一。这份集合同时供 shim 判定越界写入与清场使用。
-_Avoid_: 运行目录清单、测试项目
+_Avoid_: 测试项目、测试库
 
 **账本**:
 `runs/<runId>/created.ndjson`，本 run 建成并**建一条即记一条**的任务记录（NDJSON，一行一条：`id` / `projectId` / `title`）。它是这条 scenario 的**唯一事实源**——断言读它，清场删它。清单里的其它任务不在这个视野里（见 ADR-0010）。

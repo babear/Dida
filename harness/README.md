@@ -1,6 +1,6 @@
 # harness
 
-被测 agent 会话的启动器。每条 scenario 在一个全新的运行目录里起一个 `claude -p` 子进程，把它的原始轨迹落盘到 `runs/<runId>/`。
+被测 agent 会话的启动器。每条 scenario 在一个新建的运行目录里起一个 `claude -p` 子进程，把它的原始轨迹落盘到 `runs/<runId>/`。
 
 ## 跑
 

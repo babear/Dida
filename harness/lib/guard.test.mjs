@@ -365,7 +365,8 @@ describe('集成 · 真正 spawn shim', () => {
     const fakePath = path.join(dir, 'fake.mjs');
     fs.writeFileSync(fakePath, FAKE);
 
-    // 照运行目录的布局摆一份 shim：shim/dida-shim.mjs + shim/lib/*，好让它的相对 import 生效。
+    // 摆一份 shim 目录（dida-shim.mjs + lib/*），好让 shim 内部的相对 import 生效。
+    // 目录叫什么不影响结论：这里测的是 guard 的判定，不是运行目录的布局。
     const binDir = path.join(dir, 'bin');
     fs.mkdirSync(path.join(binDir, 'lib'), { recursive: true });
     fs.copyFileSync(SHIM_SOURCE, path.join(binDir, 'dida-shim.mjs'));

@@ -239,7 +239,7 @@ function findPowerShell() {
 // PowerShell 里嵌路径：单引号串内的 ' 要写成 ''，否则 sandboxDir 含引号时会拼出坏脚本。
 const psLiteral = (value) => `'${value.replace(/'/g, "''")}'`;
 
-// 建运行目录 shim/，并让假 CLI 把收到的 argv 写进 observed.json。返回环境前缀与观测文件路径，
+// 摆一份 shim 目录，并让假 CLI 把收到的 argv 写进 observed.json。返回环境前缀与观测文件路径，
 // 供下面几条需要真起 PowerShell 的用例共用。
 function shimFixture(dir) {
   const observed = path.join(dir, 'observed.json');

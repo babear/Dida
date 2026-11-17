@@ -394,7 +394,7 @@ test('credibilityOf：空轨迹与全是垃圾行的 detail 指向不同的下�
 
 // 运行目录 shim/ 里的 dida.cmd 是 shim 的壳：写全名调它有日志，不能判成绕过。
 test('credibilityOf：运行目录 shim/ 下的全名调用算 shim，不算绕过', () => {
-  const sandboxBin = 'C:\Temp\run-abc123\bin';
+  const sandboxBin = 'C:\Temp\run-abc123\shim';
   const out = credibilityOf({
     calls: [{ argv: ['task', 'get'] }],
     toolCalls: [{ name: 'PowerShell', input: { command: `${sandboxBin}\dida.cmd task get` } }],

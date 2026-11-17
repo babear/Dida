@@ -257,9 +257,9 @@ test('argv 带变量但日志里一条都没有时仍判不一致', () => {
 // 运行目录 shim/ 里的 dida.cmd 是 shim 的壳，写绝对路径也能命中它（PATH 之外的全名调用）。
 // 那种调用有日志，不是绕过；判据得知道运行目录才能区分。
 test('运行目录 shim/ 下的绝对路径仍是 shim，不是绕过', () => {
-  const sandboxBin = String.raw`C:\Temp\run-abc123\bin`;
+  const sandboxBin = String.raw`C:\Temp\run-abc123\shim`;
   const out = compareInvocations(
-    [ps(String.raw`C:\Temp\run-abc123\bin\dida.cmd task get inbox a`)],
+    [ps(String.raw`C:\Temp\run-abc123\shim\dida.cmd task get inbox a`)],
     [{ argv: ['task', 'get', 'inbox', 'a'] }],
     { shimDir: sandboxBin },
   );
@@ -270,7 +270,7 @@ test('运行目录以外的绝对路径仍是绕过', () => {
   const out = compareInvocations(
     [ps(String.raw`C:\other\dida.cmd task get inbox a`)],
     [{ argv: ['task', 'get', 'inbox', 'a'] }],
-    { shimDir: String.raw`C:\Temp\run-abc123\bin` },
+    { shimDir: String.raw`C:\Temp\run-abc123\shim` },
   );
   assert.equal(out.status, 'inconsistent', JSON.stringify(out));
 });
