@@ -41,7 +41,7 @@ npm run test:harness  # harness 自己的单元测试，不烧 API
 |---|---|
 | `CLAUDE_EXE` | `claude` 可执行文件路径。不设时依次尝试 `<node 目录>/node_modules/@anthropic-ai/claude-code/bin/claude.exe`、`<node 目录>/../node_global/…`、`npm prefix -g` 下的同一路径；全都找不到则报错退出 |
 | `DIDA_CMD` | 真 `dida.cmd` 的绝对路径。不设时从 `PATH` 里找第一个 `dida.cmd`；找不到则报错退出（不会退化成自递归 shim） |
-| `DIDA_TEST_PROJECTS` | 测试清单 id，逗号分隔。不设时用 `Test_1` 与 `Test_2`（见 `harness/lib/projects.mjs`）。覆盖成空值会退回默认。`run.mjs` 把它烘焙进沙箱的 `bin/lib/guard-config.mjs` 而不注入子进程环境；shim 也不读这个变量（操作者环境里若设了它，`sanitizeEnv` 会照常透传，但判定不受影响） |
+| `DIDA_TEST_PROJECTS` | 测试清单 id，逗号分隔。不设时用 `Test_1` 与 `Test_2`（见 `harness/lib/projects.mjs`）。覆盖成空值会退回默认。`run.mjs` 把它烘焙进沙箱的 `shim/lib/guard-config.mjs` 而不注入子进程环境；shim 也不读这个变量（操作者环境里若设了它，`sanitizeEnv` 会照常透传，但判定不受影响） |
 
 ## scenario
 
@@ -125,17 +125,22 @@ npm run test:harness  # harness 自己的单元测试，不烧 API
 
 ```
 run-<runId>/
-├── .claude/
+├── work/                  # ← 被测 agent 的 cwd。只放它该看的
+│   └── materials/         # scenario 素材（若有）
+├── config/                # ← CLAUDE_CONFIG_DIR。不在 cwd 里
 │   ├── settings.json      # 只含源 settings.json 的 ANTHROPIC_* 键
 │   └── skills/dida-cli/   # 从 --skill-path 整体复制，末尾追加调用方标记
-├── agents.json            # 从 harness/agents.json 复制，工具面限定
-├── bin/                   # 前置到 PATH 的 shim：dida.ps1 + dida.cmd + dida-shim.mjs + lib/
-└── materials/             # scenario 素材（若有）
+├── agents.json            # 从 harness/agents.json 复制，--agents 指这里
+└── shim/                  # 前置到 PATH 的 shim：dida.ps1 + dida.cmd + dida-shim.mjs + lib/
 ```
+
+**只有 `work/` 是 cwd。** shim、配置、工具面定义都在它的上一层——agent 的 `Get-ChildItem` 看不到它们，但仍通过 `PATH`、`CLAUDE_CONFIG_DIR`、`--agents` 正常生效（见 #16）。
 
 `harness/agents.json` 是 `--agents` 的定义文件，在仓库里，有 diff、能 review、能回滚（选 `--agents` 的理由见 `docs/specs/dida-cli-skill-评测平台.md` 的「会话启动契约」）。运行时原样复制进沙箱，不在代码里拼装。
 
-会话以沙箱为 `cwd`、`CLAUDE_CONFIG_DIR` 指向沙箱的 `.claude/` 启动，并从父进程环境里剔除全部以 `CLAUDE` 开头的变量。实测这样只暴露 `.claude/skills/` 里那一份 skill，`~/.claude/skills/` 下的同名软链接不参与竞争。
+会话以 `work/` 为 `cwd`、`CLAUDE_CONFIG_DIR` 指向 `config/` 启动，并从父进程环境里剔除全部以 `CLAUDE` 开头的变量。实测这样只暴露 `config/skills/` 里那一份 skill，`~/.claude/skills/` 下的同名软链接不参与竞争。
+
+**`settings.json` 必须留在 `config/` 里。** 实测把 `CLAUDE_CONFIG_DIR` 指到只有 `skills/`、没有 `settings.json` 的目录时，`~/.claude/settings.json` 不会回退生效，会话直接判 `Not logged in`——配置目录是一个整体开关，没有"只换 skill 不换 settings"的粒度。
 
 ## 调用方标记
 
@@ -145,7 +150,7 @@ run-<runId>/
 
 ## 会话启动契约
 
-- `--agents` + `--agent dida-scenario`：工具面 `Skill`、`PowerShell`、`Read`、`Glob`、`Grep`、`Write`。`--allowedTools` 必须同时给，否则 `dontAsk` 会拒掉所有命令。
+- `--agents` + `--agent dida-scenario`：工具面 `Skill`、`PowerShell`、`Read`、`Glob`、`Grep`。`--allowedTools` 必须同时给，否则 `dontAsk` 会拒掉所有命令。
 - stdin 重定向到 `ignore`（即 `/dev/null`）。不关 stdin 时 `claude -p` 会等输入并挂死。
 - `--output-format stream-json --verbose` 写 `trace.ndjson`，`--no-session-persistence` 避免落进用户目录。
 - 环境：`sanitizeEnv` 剔除从父进程继承的全部 `CLAUDE` 开头变量，再显式设回 `CLAUDE_CONFIG_DIR`。**这不是完整的环境隔离**——CLI 会自行注入 `CLAUDECODE`、`CLAUDE_CODE_SESSION_ID` 等一批变量，与父进程传不传无关，清单与含义见 ADR-0008 的后果段。写断言时不要假设子进程环境干净。
@@ -179,8 +184,10 @@ run-<runId>/
 其余写命令（`project create`、`project group *`、`habit *`、`focus *`、`tag *`、`auth login/logout/token`）没有可判定的目标清单，**一律拒绝**。读命令放行；既不在写表也不在读表的命令按未知拒绝，不默认放行。
 
 - 拒绝时 stderr 一行 `DIDA API 错误 404: {...}`（`resource_not_found`，`errorId` 每次随机），stdout 为空，退出码 1——与真 CLI 在 API 失败时的形态一致，不暴露这是评测环境。
-- 测试清单集合在生成沙箱时烘焙进 `bin/lib/guard-config.mjs`，**不从环境变量读**：被测 agent 能读能改进程环境，从 env 读白名单等于把判定权交给它。
-- **这个防护不是只读的**：`bin/` 在沙箱内，agent 的工具面里有 `Write`，可以覆写 `guard-config.mjs` 后让 shim 放行。要真正堵住需要把白名单放到 agent 写不到的位置，与「沙箱不隔离文件系统」同源，见 #3。
+- 测试清单集合在生成沙箱时烘焙进 `shim/lib/guard-config.mjs`，**不从环境变量读**：被测 agent 能读能改进程环境，从 env 读白名单等于把判定权交给它。
+- **沙箱分两块，只有 `work/` 是 agent 的 cwd**（#16）：`work/` 里只有 `materials/`；shim 在 `shim/`、skill 与 settings 在 `config/`、工具面定义在 `agents.json`，三者都在 `work/` 的上一层。实测 agent 在 cwd 里看到 `bin/` 与 `.claude/` 就会去翻（`Get-ChildItem -Force -Recurse materials, .claude, bin`、`Get-Content agents.json`），看不到就不会。挪出去不是安全边界——agent 有 `PowerShell`，绝对路径仍读得到（#3）——而是把"无意看到"这条路径去掉，实测里那正是唯一发生的。
+- 工具面去掉了 `Write`：当前没有 scenario 需要写文件，而它能直接覆写越界防护的白名单。
+- 曾试过给 shim 与白名单加 Windows ACL deny 并做会话前后指纹比对，最终撤掉：实测 agent 用 `icacls <file> /remove:d <user>` 一行就能解除，解除后覆写、越界调用照常发生（与 #16 的复现逐字一致）。它防不住有意绕过，却带来锁死沙箱的风险。真正的边界要等 #3 的执行模型方案。
 - 只给到命令组（`dida task`、`dida project group`）或接在组名后的 `help`（`task help`、`project group help`）只打印用法，照常放行。
 - 转发时把真 CLI 错误路径上那行 `Assertion failed: … UV_HANDLE_CLOSING` 滤掉。
 - 参数解析复刻 commander 语义：`--flag=value`、flag 夹在位置参数中间、`--` 之后一律当位置参数、重复 flag 全部校验、`--project=` 空值视为解析不出目标。
@@ -207,7 +214,7 @@ run-<runId>/
 
 ## 已知边界
 
-- 沙箱只隔离工作目录，不隔离文件系统：agent 仍可用绝对路径读沙箱外的文件，也可用绝对路径直接调真 `dida.cmd` 绕过 shim；`bin/lib/guard-config.mjs` 也在它的可写范围内。见 #3。
+- 沙箱只隔离工作目录，不隔离文件系统：agent 仍可用绝对路径读沙箱外的文件，也可用绝对路径直接调真 `dida.cmd` 绕过 shim。shim 与白名单在 `shim/`、不在 cwd 里（#16），但那是减少暴露面不是安全边界——绝对路径仍读得到。见 #3。
 - 轮数看门狗与预算护栏未实现，见 #11。
 - 多行 `--content` 只经 `dida.ps1` 入口时保真；`dida.cmd` 的 `%*` 层仍会截成第一行。`--` 分隔符、空串值、5.1 的双引号也各有失真，汇总见 ADR-0013，处理见 #29。
 - 越界写入防护只覆盖有目标清单的写命令；`habit *`、`focus *`、`tag *`、`project create`、`project group *` 一律拒绝，而不是校验它们的目标。

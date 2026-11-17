@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { createSandbox, renderGuardConfig, writeShim } from './sandbox.mjs';
+import { createSandbox, renderGuardConfig, sandboxRootOf, writeShim } from './sandbox.mjs';
 import { toolFaceOf } from './session.mjs';
 
 const PROJECTS = ['69abc459ebbdbd00000009f0', '59f736cae4b060e424059e3b'];
@@ -18,6 +18,14 @@ test('agents.json 的工具面不含 Bash：shim 覆盖不到它，可信度检�
   const tools = toolFaceOf(path.join(import.meta.dirname, '..', 'agents.json'));
   assert.ok(!tools.includes('Bash'), `工具面里出现了 Bash：${tools.join(',')}；见 #37 与 calllog.mjs 的 crossCheck`);
   assert.ok(tools.includes('PowerShell'), '工具面必须含 PowerShell：它是唯一能执行命令的工具');
+});
+
+// 工具面不含 Write：当前没有 scenario 需要写文件（checklist-desc-field 实测 Write 使用次数为 0），
+// 而它能直接覆写 bin/lib/guard-config.mjs（#16）。想去掉这条断言的人先回答：
+// 哪条 scenario 需要写？PowerShell 的 Set-Content 同样能写文件，Write 不多给能力。
+test('agents.json 的工具面不含 Write：它能直接覆写越界防护的白名单', () => {
+  const tools = toolFaceOf(path.join(import.meta.dirname, '..', 'agents.json'));
+  assert.ok(!tools.includes('Write'), `工具面里出现了 Write：${tools.join(',')}；见 #16`);
 });
 
 // npm 生成的 .cmd 模板，parseCmdShim 要从中解析出 node 与脚本入口。
@@ -121,6 +129,53 @@ function sandboxFixture(t) {
   return { dir, skillPath, agentsSourcePath, settingsPath, runId };
 }
 
+test('createSandbox 的落点与 sandboxRootOf 一致：异常路径靠它找回沙箱解锁', (t) => {
+  const { skillPath, agentsSourcePath, settingsPath, runId } = sandboxFixture(t);
+  const sandbox = createSandbox({
+    runId,
+    skillPath,
+    agentsSourcePath,
+    scenario: { prompt: 'x', materialsDir: null },
+    settingsPath,
+    testProjects: PROJECTS,
+  });
+  t.after(() => fs.rmSync(sandbox.root, { recursive: true, force: true }));
+
+  assert.equal(sandbox.root, sandboxRootOf(runId), '两处路径规则必须一致');
+});
+
+// 新布局的核心约束：cwd（work/）里只有 materials，shim、配置、工具面定义都在它的
+// 上一层。实测 agent 在 cwd 里看到 bin/ 与 .claude/ 就会去翻（`Get-ChildItem -Force
+// -Recurse materials, .claude, bin`），看不到就不会——这是 #16 的实际缓解手段。
+test('work/ 里只有 materials：shim、配置、agents.json 都不在 cwd 视野内', (t) => {
+  const { dir, skillPath, agentsSourcePath, settingsPath, runId } = sandboxFixture(t);
+  const materialsDir = path.join(dir, 'materials-src');
+  fs.mkdirSync(materialsDir, { recursive: true });
+  fs.writeFileSync(path.join(materialsDir, 'plan.md'), 'x');
+
+  const sandbox = createSandbox({
+    runId,
+    skillPath,
+    agentsSourcePath,
+    scenario: { prompt: 'x', materialsDir },
+    settingsPath,
+    testProjects: PROJECTS,
+  });
+  t.after(() => fs.rmSync(sandbox.root, { recursive: true, force: true }));
+
+  assert.deepEqual(fs.readdirSync(sandbox.workDir), ['materials'], 'cwd 里只该有 materials');
+
+  // 四样东西仍然存在且可用，只是不在 work/ 之下。
+  assert.equal(fs.existsSync(path.join(sandbox.binDir, 'dida.ps1')), true);
+  assert.equal(fs.existsSync(path.join(sandbox.configDir, 'settings.json')), true);
+  assert.equal(fs.existsSync(path.join(sandbox.configDir, 'skills', 'dida-cli', 'SKILL.md')), true);
+  assert.equal(fs.existsSync(sandbox.agentsPath), true);
+
+  for (const outside of [sandbox.binDir, sandbox.configDir, sandbox.agentsPath]) {
+    assert.ok(!outside.startsWith(sandbox.workDir), `${outside} 不该在 cwd 之下`);
+  }
+});
+
 test('createSandbox 把 materials 连子目录一起复制进沙箱', (t) => {
   const { dir, skillPath, agentsSourcePath, settingsPath, runId } = sandboxFixture(t);
 
@@ -138,7 +193,7 @@ test('createSandbox 把 materials 连子目录一起复制进沙箱', (t) => {
   });
   t.after(() => fs.rmSync(sandbox.root, { recursive: true, force: true }));
 
-  assert.equal(fs.readFileSync(path.join(sandbox.root, 'materials', 'nested', 'deep.md'), 'utf8'), 'deep');
+  assert.equal(fs.readFileSync(path.join(sandbox.workDir, 'materials', 'nested', 'deep.md'), 'utf8'), 'deep');
 });
 
 test('createSandbox 没有 materials 时不建空目录', (t) => {
@@ -154,7 +209,7 @@ test('createSandbox 没有 materials 时不建空目录', (t) => {
   });
   t.after(() => fs.rmSync(sandbox.root, { recursive: true, force: true }));
 
-  assert.equal(fs.existsSync(path.join(sandbox.root, 'materials')), false);
+  assert.equal(fs.existsSync(path.join(sandbox.workDir, 'materials')), false);
 });
 
 // #13 的核心断言：PowerShell 在沙箱 bin 内解析 dida 时必须命中 .ps1，

@@ -29,7 +29,7 @@ shim 记下的 `dida` 调用序列，`runs/<runId>/calls.ndjson`，每行一条 
 _Avoid_: 记录、shim 日志
 
 **工具面**:
-被测 agent 启动时被授予的工具名集合，由 `harness/agents.json` 定义。本项目的工具面是 `Skill`、`PowerShell`、`Read`、`Glob`、`Grep`、`Write`；**不含 `Bash`**——shim 没有 bash 形态，可信度检查只从 `PowerShell` 调用里找 dida 命令（见 #37）。
+被测 agent 启动时被授予的工具名集合，由 `harness/agents.json` 定义。本项目的工具面是 `Skill`、`PowerShell`、`Read`、`Glob`、`Grep`；**不含 `Bash`**——shim 没有 bash 形态，可信度检查只从 `PowerShell` 调用里找 dida 命令（见 #37）。**也不含 `Write`**——没有 scenario 需要写文件，而它能直接覆写越界防护的白名单（见 #16）。
 _Avoid_: 工具箱、权限、allowedTools（除非指命令行参数）
 
 **shell**:

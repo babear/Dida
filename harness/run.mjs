@@ -303,7 +303,9 @@ async function runOne(options, scenario, projects, assertionFn) {
   // 被测 agent 能读也能改进程环境，白名单必须烘焙在沙箱配置里。
   env.DIDA_CALL_LOG = callLogPath;
   env.DIDA_CREATED_FILE = createdFile;
-  const session = await runSession({ argv, cwd: sandbox.root, env, transcriptPath });
+  // cwd 是 work/ 而不是整个沙箱：shim、配置、工具面定义都在它的上一层，
+  // agent 列目录只看得到 materials/。见 sandbox.mjs 的 createSandbox。
+  const session = await runSession({ argv, cwd: sandbox.workDir, env, transcriptPath });
 
   const events = parseTranscript(transcriptPath);
   const summary = summarizeTranscript(events);
@@ -360,7 +362,7 @@ async function runOne(options, scenario, projects, assertionFn) {
 
   const manifest = {
     run: runKey,
-    scenario: id,
+    scenario: scenario.id,
     kind: scenario.kind,
     // 探针目录里的 assert.mjs 不执行，报告要据此留一行提示（ADR-0015）。
     unusedAssert: scenario.kind === 'probe' && scenario.hasAssert,
@@ -679,7 +681,15 @@ async function main() {
     const finalManifest = { ...manifest, cleanup, sandboxRetained: retained };
     writeManifest(runDir, finalManifest);
     writeReport(runDir, finalManifest);
-    if (!retained) fs.rmSync(sandbox.root, { recursive: true, force: true });
+    if (!retained) {
+      try {
+        fs.rmSync(sandbox.root, { recursive: true, force: true });
+      } catch (error) {
+        // 删不掉的沙箱会在 %TEMP% 里堆着。到这一步已经不指望能删，
+        // 只把位置说清楚，让人手工处理。
+        console.error(`    沙箱删除失败（${error.code ?? error.message}）：${sandbox.root}`);
+      }
+    }
     if (defer) retainedRuns.push({ run, scenario: id, status: manifest.assertion.status });
 
     // 清场失败只记 log 不中断：每条 scenario 的账本按 runId 隔离，删不掉自己的那几条
