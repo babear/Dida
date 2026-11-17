@@ -20,7 +20,7 @@ npm run test:harness  # harness 自己的单元测试，不烧 API
 | `--hold` | 关 | 跑完不清场，留现场给人看；之后用 `--clean <runId>` 收尾 |
 | `--clean <runId>` | — | 只按该 run 的 `created.ndjson` 删除任务，然后退出。**不改写 `report.md`，也不覆盖 `manifest.cleanup`**——那份报告与当时的结论是那次运行的产物，收尾只把结果记到 `manifest.cleanupAfter` |
 
-退出码：任一 scenario 断言未通过、会话非零退出或超时、用例配置错误（缺 `assert.mjs`，或断言模块加载失败、没给出合法结果）、可信度检查不过（有 dida 调用没进日志，或轨迹读不出可比的调用）、终态快照取不到、清场中止或删除失败，都是 1。
+退出码：任一 scenario 断言未通过、会话非零退出或超时、用例配置错误（缺 `assert.mjs`，或断言模块加载失败、没给出合法结果）、预设失败（越界、指向已有任务、空操作、执行失败）、可信度检查不过（有 dida 调用没进日志，或轨迹读不出可比的调用）、终态快照取不到、清场中止或删除失败，都是 1。
 
 ### 清场纪律
 
@@ -51,14 +51,20 @@ npm run test:harness  # harness 自己的单元测试，不烧 API
 |---|---|---|---|
 | `scenario.json` | `prompt`，唯一给 agent 的文本输入 | 是 | 已有 |
 | `materials/` | 可选，整体复制进沙箱 `materials/` | 是 | 已有 |
-| `preset.mjs` | 可选，声明要建的任务，会话前由 harness 用真 CLI 执行 | 否 | 未实现 |
+| `preset.mjs` | 可选，声明要建的任务，会话前由 harness 用真 CLI 执行 | 否 | 已有 |
 | `assert.mjs` | 结局断言，默认导出 `{tasks, created, calls, session} => 结果数组` | 否 | 已有 |
 
 加一条 scenario 就是加一个目录，harness 一行不用改（前提是 `assert.mjs` 与 `preset.mjs` 已实现）。目录形态与三面判定的完整理由见 ADR-0012。
 
-**`scenario.json`、`materials/` 与 `assert.mjs` 现在能跑。** `preset.mjs` 归 #19。在那之前，目录里放 `preset.mjs` 不会被执行。
+**`scenario.json`、`materials/`、`preset.mjs` 与 `assert.mjs` 都能跑。**
 
-`preset.mjs` 建前置数据时从 harness 拿到**本次 run 的清单**，不是仓库里的默认常量——用默认常量会在环境变量覆盖时建到清场的视野外，成为删不掉的孤儿。校验规则见 ADR-0012：目标清单必须 ∈ 本次清单集合；指向已有任务的参数（`--parent-id`、`task update --id` 等）与 `--help` 这类空操作一律拒绝。它建出的任务立刻记进本 run 的账本，和 shim 记的是同一份。
+`preset.mjs` 建前置数据时从 harness 拿到**本次 run 的清单**，不是仓库里的默认常量——用默认常量会在环境变量覆盖时建到清场的视野外，成为删不掉的孤儿。校验规则见 ADR-0012：目标清单必须 ∈ 本次清单集合；指向已有任务的参数（`--parent-id`、`task update --id` 等）与 `--help` 这类空操作一律拒绝。它建出的任务立刻记进本 run 的账本（`origin: 'preset'`），和 shim 记的是同一份。
+
+`preset.mjs` 的三条硬规则：
+
+1. **默认导出一个函数**，harness 把本次清单传进去：`export default (projects) => [['task', 'create', '--project', projects[0], '--title', '买气罐']]`。
+2. **整体校验先于执行**：任一条越界、指向已有任务、或是空操作（`--help`、裸命令组、只读命令）就拒绝该 run，一条都不执行、不建沙箱、不进入会话。
+3. **失败不清场**：建出的任务留在 `runs/<runId>/created.ndjson`，用 `--clean <runId>` 收尾。预设只造数据结构，不造语义提示。
 
 `assert.mjs` 返回 `{ok, name, expected, actual}[]`，空数组即通过。它按**字段**定位任务（`childIds.length === 5`、`kind === 'TEXT'`），不按顺序猜。`created` 条目带 `origin: 'preset' | 'agent'`。
 
@@ -108,6 +114,7 @@ npm run test:harness  # harness 自己的单元测试，不烧 API
 | `INVALID` | 结果不可用，三种原因：终态快照取不到 / 调用日志与轨迹对不上 / 轨迹读不出 | 快照失败→重跑；后两者→先查明原因，重跑不一定有用 |
 | `INCOMPLETE` | 会话没正常结束，判定链未开始（不取快照、不跑断言） | 看退出码与轨迹，查会话为什么没跑完 |
 | `MISCONFIGURED` | 缺 `assert.mjs`，不开会话但仍落一份只含判定的报告 | 补用例，或移到 `probes/` |
+| `PRESET FAILED` | `preset.mjs` 越界、指向已有任务、空操作或执行失败：不建沙箱、不开会话、不清场 | 改 `preset.mjs`；已建的任务用 `--clean <runId>` 收尾 |
 | `NOT FOUND` | `--scenario` 写错 id | 改正 id |
 
 过程断言归 #8。可信度判据已于 #18 从「比条数」改为逐调用比对：轨迹里的 dida 调用与调用日志逐条对，与 dida 无关的 PowerShell 命令不参与判断。

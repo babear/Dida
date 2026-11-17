@@ -426,3 +426,43 @@ test('正式用例标识同样出现在标题行', () => {
   const titleLine = report.split('\n').find((line) => line.startsWith('# '));
   assert.match(titleLine, /scenario/);
 });
+
+// 预设失败没开会话，但**已经建出了任务**：报告必须列出它们，
+// 否则读者拿着报告无从知道 --clean 会删哪几条（#19）。
+test('预设失败的报告列出已建的任务，不只是判定', () => {
+  const report = renderReport({
+    run: 'r-preset',
+    scenario: 's-preset',
+    assertion: { status: 'preset-failed', detail: '预设第 2 条失败：task create --project p1' },
+    created: [{ id: 'aaaa00000000000000000001', projectId: '69abc459ebbdbd00000009f0', title: '买气罐', origin: 'preset' }],
+    session: {},
+  });
+  assert.match(report, /预设建出的任务/);
+  assert.match(report, /aaaa00000000000000000001/);
+  assert.match(report, /买气罐/);
+  assert.match(report, /预设失败/);
+});
+
+test('预设失败但一条都没建出来时，报告照样说清楚', () => {
+  const report = renderReport({
+    run: 'r-p',
+    scenario: 's-p',
+    assertion: { status: 'preset-failed', detail: '越界' },
+    created: [],
+    session: {},
+  });
+  assert.match(report, /一条都没有建出来/);
+  assert.doesNotMatch(report, /## 会话/, '没开会话就不该有会话小节');
+});
+
+test('缺断言的报告仍不列出任务小节——那种 run 确实什么都没建', () => {
+  const report = renderReport({
+    run: 'r-m',
+    scenario: 's-m',
+    assertion: { status: 'missing', detail: '缺 assert.mjs' },
+    created: [],
+    session: {},
+  });
+  assert.match(report, /缺断言/);
+  assert.doesNotMatch(report, /预设建出的任务/);
+});

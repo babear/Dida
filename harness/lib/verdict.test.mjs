@@ -317,3 +317,19 @@ test('可信度失败（会话正常结束）时也不出现会话中断的措�
   });
   assert.doesNotMatch(text, /会话在此终止/);
 });
+
+// 预设失败（#19）：这次 run 在建沙箱之前就停了，判定链无从开始。
+// 措辞要指向 preset.mjs，并点名账本还在、--clean 收得到。
+test('预设失败时报告说明没进入会话，并指向 preset.mjs', () => {
+  const text = renderVerdict({
+    assertion: { status: 'preset-failed', detail: '预设被拒绝（out-of-bounds）：目标不在本次清单集合内', results: [] },
+    run: 'r-1',
+  });
+  assert.match(text, /预设失败/);
+  assert.match(text, /没有进入会话/);
+  assert.match(text, /out-of-bounds/);
+  assert.match(text, /preset\.mjs/);
+  assert.match(text, /--clean/);
+  assert.doesNotMatch(text, /断言未通过/, '这不是断言这一面的事');
+  assert.doesNotMatch(text, /重跑一次/, '预设写错了，重跑不会好');
+});

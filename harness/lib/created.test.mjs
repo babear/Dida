@@ -29,6 +29,20 @@ test('账本条目带 origin，断言能区分预设与 agent 建的', (t) => {
   assert.equal(readCreated(file)[0].origin, 'agent');
 });
 
+test('预设记的账 origin 是 preset，与 shim 记的进同一份账本', (t) => {
+  const file = tmpFile(t);
+  recordCreated(file, {
+    argv: ['task', 'create', '--project', 'p1', '--title', '前置'],
+    stdout: 'ID: 6aee00000000000000000011\n',
+    origin: 'preset',
+  });
+  recordCreated(file, {
+    argv: ['task', 'create', '--project', 'p1', '--title', 'agent 建的'],
+    stdout: 'ID: 6aee00000000000000000012\n',
+  });
+  assert.deepEqual(readCreated(file).map((e) => e.origin), ['preset', 'agent']);
+});
+
 test('每条记录单独一行，追加而不是重写整个文件', (t) => {
   const file = tmpFile(t);
   recordCreated(file, { argv: ['task', 'create', '--project', 'p1'], stdout: 'ID: 6aee00000000000000000001\n' });

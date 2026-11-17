@@ -14,6 +14,7 @@ import { buildState } from './lib/state.mjs';
 import { crossCheck, crossCheckStatus, outOfBoundsCalls, parseCallLog, rejectedCalls } from './lib/calllog.mjs';
 import { readCreated } from './lib/created.mjs';
 import { cleanRun } from './lib/cleanup.mjs';
+import { runPreset } from './lib/preset.mjs';
 import { resolveTestProjects } from './lib/projects.mjs';
 import { formatValue, INCOMPLETE_FACT, invalidLabel, renderReport, retentionNote } from './lib/report.mjs';
 
@@ -243,6 +244,39 @@ async function runOne(options, scenario, projects, assertionFn) {
   const runDir = path.join(runsDir, runKey);
   fs.mkdirSync(runDir, { recursive: true });
 
+  const createdFile = path.join(runDir, 'created.ndjson');
+
+  // 预设排在建沙箱之前（#19 / ADR-0012）：它只要本次清单、runId 与账本路径，
+  // 这三样到这里都确定了；失败时也不必浪费一次建沙箱。
+  // 它走真 CLI、不经 shim——shim 是给被测 agent 用的，预设不是什么都要拦住。
+  // 建出的 id 立刻进同一份账本，于是自动清场与 --clean 都管得到。
+  // 加载与执行都归 runPreset：两者失败对编排层是同一件事——不进入会话、不清场。
+  if (scenario.hasPreset) {
+    try {
+      await runPreset({ scenarioDir: scenario.dir, dida: realDida(), projects, createdFile });
+    } catch (error) {
+      // 失败时**不清场**：账本留在 runDir，--clean <runId> 读得到、删得掉已建的任务。
+      // 也不建沙箱、不开会话——没有可判的事实，报一份只含判定与预设错误的报告。
+      const manifest = {
+        run: runKey,
+        scenario: id,
+        // 报告标题行按 kind 分区（探针 / scenario）：少了它，一条带预设的探针
+        // 失败时会渲染成 `# scenario …`（README「报告标题行标明身份」）。
+        kind: scenario.kind,
+        skill: { source: options.skillPath },
+        preset: { status: 'failed', detail: error.message, reason: error.reason ?? null },
+        assertion: { status: 'preset-failed', detail: error.message, results: [] },
+        created: readCreated(createdFile),
+        calls: {},
+        session: {},
+        testProjects: projects,
+      };
+      writeManifest(runDir, manifest);
+      writeReport(runDir, manifest);
+      return { run: runKey, runDir, sandbox: null, manifest, session: { exitCode: 1, timedOut: false }, createdFile };
+    }
+  }
+
   const sandbox = createSandbox({
     runId: runKey,
     skillPath: options.skillPath,
@@ -254,7 +288,6 @@ async function runOne(options, scenario, projects, assertionFn) {
 
   const transcriptPath = path.join(runDir, 'trace.ndjson');
   const callLogPath = path.join(runDir, 'calls.ndjson');
-  const createdFile = path.join(runDir, 'created.ndjson');
   const argv = buildSessionArgv({
     prompt: scenario.prompt,
     agentsPath: sandbox.agentsPath,
@@ -604,6 +637,18 @@ async function main() {
 
     const { run, runDir, sandbox, manifest, session, createdFile } = await runOne(options, scenario, projects, assertionFn);
     const completed = sessionCompleted(session);
+
+    // 预设失败：不开会话、不清场。账本与报告已由 runOne 落盘，--clean 能收尾。
+    // 进不了会话的运行没有判定可给，直接报到汇总里让操作者收。
+    if (manifest.assertion.status === 'preset-failed') {
+      retainedRuns.push({ run, scenario: id, status: manifest.assertion.status });
+      console.error(`PRESET FAILED ${id}  run=${run}`);
+      console.error(`  ${manifest.assertion.detail}`);
+      console.error(`  created=${manifest.created.length} 条（账本保留，用 --clean ${run} 收尾）`);
+      console.error(`  run dir=${path.relative(repoRoot, runDir)}`);
+      failures += 1;
+      continue;
+    }
 
     // 只有 PASSED 才清场（ADR-0014）；探针则永不清场（ADR-0015）。
     const defer = cleanupGate({
