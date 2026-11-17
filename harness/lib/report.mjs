@@ -251,6 +251,10 @@ export function renderReport(manifest) {
   lines.push(`- 退出码 ${manifest.session?.exitCode ?? 'unknown'}${manifest.session?.timedOut ? '（超时）' : ''}`);
   lines.push(`- ${manifest.session?.turns ?? '?'} 轮，$${cost(manifest.session?.costUsd)}`);
   lines.push(`- 调用日志 ${manifest.calls?.path ?? '-'}（${manifest.calls?.total ?? 0} 条）`);
+  // 判据点名了哪几次调用没对上之后，读者需要轨迹才能自己核对（#18 移交的第 3 条）。
+  if (manifest.transcript?.path) {
+    lines.push(`- 轨迹 ${manifest.transcript.path}（${manifest.transcript.events ?? 0} 条事件，${manifest.transcript.toolCalls ?? 0} 次工具调用）`);
+  }
   if (manifest.calls?.rejected) {
     const outOfBounds = manifest.calls.outOfBounds ?? 0;
     const other = manifest.calls.rejected - outOfBounds;
@@ -265,12 +269,14 @@ export function renderReport(manifest) {
   const judged = manifest.assertion?.status !== 'incomplete' && manifest.assertion?.status !== 'skipped';
   if (cross && judged) {
     // 三态：判不出结论时不能说「对得上」，那是把「不知道」当成「没问题」。
+    // 判据是逐调用比对（#18），detail 里点出是哪几次调用没对上、以及为什么判不了。
     // 旧 manifest 只有 consistent 布尔（那时还没有「判不出」这个概念），按它回退。
     const status = cross.status ?? (cross.consistent ? 'consistent' : 'inconsistent');
+    const why = cross.detail ? `：${cross.detail}` : '';
     const line = {
-      consistent: `- 与轨迹对得上：${cross.calls} 条 dida 调用 / ${cross.shapeCalls} 次 PowerShell`,
-      inconsistent: `- **与轨迹对不上**：${cross.calls} 条 dida 调用 / ${cross.shapeCalls} 次 PowerShell；条数不等不等于有调用没被记录，多出来的可能是文件操作`,
-      indeterminate: '- **无法比对**：轨迹里没有可解析的事件，判断不了调用是否都被记录',
+      consistent: '- 与轨迹对得上：轨迹里的 dida 调用在日志里都有对应',
+      inconsistent: `- **与轨迹对不上**${why}；这几次调用没走过 shim，轨迹里找得到、日志里没有`,
+      indeterminate: `- **无法比对**${why}`,
     }[status];
     if (line) lines.push(line);
   }

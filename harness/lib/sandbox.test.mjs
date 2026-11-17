@@ -12,7 +12,7 @@ const PROJECTS = ['69abc459ebbdbd00000009f0', '59f736cae4b060e424059e3b'];
 
 // 工具面不含 Bash 是 harness 的核心前提之一，不是可选配置：
 //   - shim 只做了 .ps1 与 .cmd 两份形态，Bash 会走 MSYS 解析、跳过两者直连真 CLI（#37）；
-//   - crossCheck 的 shapeCalls 只数 PowerShell，Bash 进来会让可信度检查恒判 consistent。
+//   - crossCheck 只看 PowerShell 调用里的 dida 命令，Bash 进来就完全不在判据视野内。
 // 所以想加 Bash 的人必须先在这里看见后果，而不是改一行 agents.json 就静默生效。
 test('agents.json 的工具面不含 Bash：shim 覆盖不到它，可信度检查也会失真', () => {
   const tools = toolFaceOf(path.join(import.meta.dirname, '..', 'agents.json'));
@@ -68,7 +68,9 @@ test('writeShim 复制 shim 依赖的模块，并生成 dida.cmd 与 dida.ps1 �
 
   writeShim(path.join(dir, 'bin'), realCmd, PROJECTS);
 
-  for (const name of ['calllog.mjs', 'created.mjs', 'guard.mjs']) {
+  // powershell.mjs 是 calllog.mjs 的 import 目标：shim 只用 appendCall，
+  // 但 Node 会解析整张模块图，缺一个就起不来。
+  for (const name of ['calllog.mjs', 'powershell.mjs', 'created.mjs', 'guard.mjs']) {
     assert.ok(fs.existsSync(path.join(dir, 'bin', 'lib', name)), `缺少 ${name}`);
   }
   assert.ok(fs.existsSync(path.join(dir, 'bin', 'dida-shim.mjs')));

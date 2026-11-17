@@ -134,12 +134,17 @@ test('报告写明沙箱是保留还是已删除', () => {
   assert.match(renderReport({ ...MANIFEST, sandboxRetained: false }), /已删除/);
 });
 
-test('报告写明调用日志与轨迹是否对得上，且不把条数不等说成绕过', () => {
-  const ok = renderReport({ ...MANIFEST, calls: { ...MANIFEST.calls, crossCheck: { calls: 12, shapeCalls: 10, consistent: true } } });
-  const bad = renderReport({ ...MANIFEST, calls: { ...MANIFEST.calls, crossCheck: { calls: 3, shapeCalls: 10, consistent: false } } });
+test('报告写明调用日志与轨迹是否对得上，不一致时点名是哪次调用没对上', () => {
+  const ok = renderReport({ ...MANIFEST, calls: { ...MANIFEST.calls, crossCheck: { status: 'consistent' } } });
+  const bad = renderReport({
+    ...MANIFEST,
+    calls: { ...MANIFEST.calls, crossCheck: { status: 'inconsistent', detail: '1 次 dida 调用在日志里找不到对应：task create --title z' } },
+  });
   assert.match(ok, /对得上/);
   assert.match(bad, /与轨迹对不上/);
-  // 条数不等也可能是文件操作抬高了分母，不能断言成绕过
+  // 判据改的是「逐调用比对」（#18）：读者要能看出是哪一次，而不是自己对着两个数猜
+  assert.match(bad, /task create --title z/);
+  // 不把结果说成「已确认绕过」：判据只能指出这次调用没进日志
   assert.doesNotMatch(bad, /绕过了 shim/);
 });
 
@@ -279,6 +284,15 @@ test('旧 manifest 的 skipped（incomplete 的旧名）保留现场理由与 in
   assert.doesNotMatch(text, /没有自动清场/);
 });
 
+// 可信度判据点名了哪几次调用没对上，读者需要轨迹路径自己去核对（#18 移交的第 3 条）。
+test('报告给出轨迹路径，可信度结论才有可核对的证据来源', () => {
+  const text = renderReport({
+    ...MANIFEST,
+    transcript: { path: 'C:/runs/x/trace.ndjson', events: 12, toolCalls: 4 },
+  });
+  assert.match(text, /轨迹 C:\/runs\/x\/trace\.ndjson/);
+});
+
 // ─────────────────────────────────────────────────────────────────────────
 // 探针的报告（ADR-0015）：标题是「## 取样」而不是「## 判定」，
 // 因为探针不判断言——用「判定」会让人以为 skill 被评过。
@@ -312,10 +326,11 @@ test('探针报告写明结论是「已取样」，不冒充通过', () => {
   assert.doesNotMatch(report, /未通过/);
 });
 
-test('探针报告带可信度检查的两个条数——写断言的人靠它自查样本可靠性', () => {
+// 判据在 #18 从「比条数」改成逐调用比对之后，报告不再有两个条数可写。
+// 写断言的人仍要能自查样本可靠性：那改由可信度结论本身承担。
+test('探针报告写明可信度结论——写断言的人靠它自查样本可靠性', () => {
   const report = renderReport(probeManifest());
-  assert.match(report, /12 条 dida 调用/);
-  assert.match(report, /12 次 PowerShell/);
+  assert.match(report, /与轨迹对得上/);
 });
 
 test('探针报告写「未清场」并说明是探针保留现场', () => {

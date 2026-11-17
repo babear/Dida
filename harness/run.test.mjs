@@ -189,25 +189,43 @@ test('两个字段指向同一个对象不算环，值要原样留下', (t) => {
 // 接线测试：runOne 不导出，这层覆盖「crossCheck → 三态 → detail」的组装，
 // 免得 run.mjs 里接错时单测仍全绿。
 
-test('credibilityOf：日志条数够时判 consistent', () => {
+test('credibilityOf：轨迹里的调用在日志里都有对应时判 consistent', () => {
   const out = credibilityOf({
     calls: [{ argv: ['task', 'get'] }, { argv: ['project', 'list'] }],
-    toolCalls: [{ name: 'PowerShell' }, { name: 'PowerShell' }],
+    toolCalls: [
+      { name: 'PowerShell', input: { command: 'dida task get' } },
+      { name: 'PowerShell', input: { command: 'dida project list' } },
+    ],
     events: [{ type: 'assistant' }],
   });
   assert.equal(out.status, 'consistent');
-  assert.equal(out.detail, '2 条 dida 调用 / 2 次 PowerShell');
-  assert.equal(out.calls, 2);
+  assert.match(out.detail, /都有对应/);
 });
 
-test('credibilityOf：日志少于轨迹里的 PowerShell 次数时判 inconsistent', () => {
+test('credibilityOf：有一次 dida 调用没进日志时判 inconsistent，detail 点出是哪次', () => {
   const out = credibilityOf({
     calls: [{ argv: ['task', 'get'] }],
-    toolCalls: [{ name: 'PowerShell' }, { name: 'PowerShell' }, { name: 'PowerShell' }],
+    toolCalls: [
+      { name: 'PowerShell', input: { command: 'dida task get' } },
+      { name: 'PowerShell', input: { command: '& "C:\\bin\\dida.cmd" task create --title z' } },
+    ],
     events: [{ type: 'assistant' }],
   });
   assert.equal(out.status, 'inconsistent');
-  assert.equal(out.detail, '1 条 dida 调用 / 3 次 PowerShell');
+  assert.match(out.detail, /task create --title z/);
+  assert.deepEqual(out.unmatched.map((c) => c.argv), [['task', 'create', '--title', 'z']]);
+});
+
+test('credibilityOf：非 dida 的 PowerShell 命令不会被误判为绕过', () => {
+  const out = credibilityOf({
+    calls: [{ argv: ['task', 'get'] }],
+    toolCalls: [
+      { name: 'PowerShell', input: { command: 'Get-ChildItem -Force' } },
+      { name: 'PowerShell', input: { command: 'dida task get' } },
+    ],
+    events: [{ type: 'assistant' }],
+  });
+  assert.equal(out.status, 'consistent');
 });
 
 test('credibilityOf：轨迹一条可解析事件都没有时判 indeterminate，不是 consistent', () => {
@@ -355,6 +373,34 @@ test('前置不改动传入的对象', () => {
   const source = { Path: 'C:\\Windows' };
   withPrependedPath(source, 'C:\\bin');
   assert.deepEqual(source, { Path: 'C:\\Windows' });
+});
+
+// 空轨迹与全是垃圾行，指引相反：前者是 CLI 没吐出东西（重跑），
+// 后者是解析器/harness 缺陷（重跑没用）。同归「无法判定」，但要说清是哪种（#18 移交的第 4 条）。
+test('credibilityOf：空轨迹与全是垃圾行的 detail 指向不同的下一步', () => {
+  const empty = credibilityOf({ calls: [], toolCalls: [], events: [] });
+  const garbage = credibilityOf({
+    calls: [],
+    toolCalls: [],
+    events: [{ type: 'unparseable', raw: 'x' }, { type: 'unparseable', raw: 'y' }],
+  });
+  assert.equal(empty.status, 'indeterminate');
+  assert.equal(garbage.status, 'indeterminate');
+  assert.match(empty.detail, /重跑/);
+  assert.match(garbage.detail, /重跑没用/);
+  assert.notEqual(empty.detail, garbage.detail);
+});
+
+// 沙箱 bin/ 里的 dida.cmd 是 shim 的壳：写全名调它有日志，不能判成绕过。
+test('credibilityOf：沙箱 bin 下的全名调用算 shim，不算绕过', () => {
+  const sandboxBin = 'C:\Temp\run-abc123\bin';
+  const out = credibilityOf({
+    calls: [{ argv: ['task', 'get'] }],
+    toolCalls: [{ name: 'PowerShell', input: { command: `${sandboxBin}\dida.cmd task get` } }],
+    events: [{ type: 'assistant' }],
+    shimDir: sandboxBin,
+  });
+  assert.equal(out.status, 'consistent', JSON.stringify(out));
 });
 
 // 全量运行不碰 probes/（ADR-0015）：探针不计入回归网。但 probes/ 里有残留
