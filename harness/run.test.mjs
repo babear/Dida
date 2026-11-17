@@ -584,3 +584,58 @@ test('收尾过的 run 不再被跑前清场选中，尽管 cleanup.deferred 仍
     '运行时的结论不能被收尾抹掉',
   );
 });
+
+// 预设失败的 run 没走到清场那一步，manifest 里根本没有 cleanup 字段（#19）。
+// 但它建出的预设任务还留在清单里，同样会让下一条用例的 agent 看到同名任务不再新建。
+function writePresetFailedRun(root, runKey, { scenario, created = [] }) {
+  const runDir = path.join(root, 'runs', runKey);
+  fs.mkdirSync(runDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(runDir, 'manifest.json'),
+    JSON.stringify({
+      run: runKey,
+      scenario,
+      kind: 'scenario',
+      testProjects: [],
+      assertion: { status: 'preset-failed', detail: '越界', results: [] },
+    }),
+  );
+  if (created.length > 0) {
+    fs.writeFileSync(
+      path.join(runDir, 'created.ndjson'),
+      created.map((entry) => `${JSON.stringify(entry)}\n`).join(''),
+    );
+  }
+  return runDir;
+}
+
+test('预设失败且建出了任务的 run 进跑前清场', (t) => {
+  const root = tmpRepo(t);
+  writePresetFailedRun(root, '2026-11-17T01-00-00-000Z-pf', {
+    scenario: 'p1',
+    created: [{ id: 'aaaa00000000000000000001', projectId: 'x', title: '前置', origin: 'preset' }],
+  });
+  const found = previousRunOf(root, 'p1');
+  assert.ok(found, '预设建的任务还在清单里，下一次跑会被它污染');
+  assert.equal(path.basename(found.runDir), '2026-11-17T01-00-00-000Z-pf');
+});
+
+test('预设失败但一条都没建出来的 run 不进跑前清场——清它只是白枚举一次', (t) => {
+  const root = tmpRepo(t);
+  writePresetFailedRun(root, '2026-11-17T01-00-00-000Z-pf', { scenario: 'p1' });
+  assert.equal(previousRunOf(root, 'p1'), null);
+});
+
+test('预设失败的 run 收尾之后不再重复进跑前清场', (t) => {
+  const root = tmpRepo(t);
+  const runDir = writePresetFailedRun(root, '2026-11-17T01-00-00-000Z-pf', {
+    scenario: 'p1',
+    created: [{ id: 'aaaa00000000000000000001', projectId: 'x', title: '前置', origin: 'preset' }],
+  });
+  const manifest = JSON.parse(fs.readFileSync(path.join(runDir, 'manifest.json'), 'utf8'));
+  fs.writeFileSync(
+    path.join(runDir, 'manifest.json'),
+    JSON.stringify({ ...manifest, cleanupAfter: { deleted: [], failed: [], remaining: [], mismatched: [] } }),
+  );
+  assert.equal(previousRunOf(root, 'p1'), null);
+});

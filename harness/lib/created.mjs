@@ -55,13 +55,14 @@ export function readCreated(file) {
   return entries;
 }
 
-// origin 目前恒为 'agent'：shim 只记被测 agent 的调用，预设（#19）走真 CLI 另写。
-export function recordCreated(file, { argv, stdout, exitCode = 0 }) {
+// origin 区分谁建的：shim 记 'agent'，预设走真 CLI 另记 'preset'（#19）。
+// 断言据此只针对其中一类，清场两边都认——账本是同一份。
+export function recordCreated(file, { argv, stdout, exitCode = 0, origin = 'agent' }) {
   if (exitCode !== 0) return null;
   if (!isCreateCall(argv)) return null;
   const id = taskIdFromCreateOutput(stdout);
   if (!id) return null;
-  const entry = { id, projectId: flagValue(argv, '--project'), title: flagValue(argv, '--title'), origin: 'agent' };
+  const entry = { id, projectId: flagValue(argv, '--project'), title: flagValue(argv, '--title'), origin };
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.appendFileSync(file, `${JSON.stringify(entry)}\n`);
   return id;

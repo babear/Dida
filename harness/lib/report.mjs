@@ -144,9 +144,22 @@ export function retentionCause(manifest) {
     : retentionReason(manifest.assertion?.status);
 }
 
-export function renderVerdict({ assertion, kind }) {
+export function renderVerdict({ assertion, kind, run }) {
   const heading = headingFor(kind);
   const lines = [heading, ''];
+  // 预设失败发生在建沙箱之前（#19）：这次 run 根本没进入会话，判定链无从开始。
+  // 与「缺断言」并列成一类用法错误——修 preset.mjs，不是改 skill。
+  // 收尾那一句与保留现场共用 retentionNote，两处措辞同源。
+  if (assertion?.status === 'preset-failed') {
+    lines.push('**预设失败：本次没有进入会话**', '');
+    lines.push(assertion.detail ?? 'preset.mjs 没能执行完。');
+    lines.push(
+      '',
+      `若已建出任务，它们记在本 run 的 \`created.ndjson\` 里，${retentionNote(run)}。`,
+      '修好 `preset.mjs` 再跑；它只造数据结构，目标必须 ∈ 本次清单集合。',
+    );
+    return lines.join('\n');
+  }
   if (assertion?.status === 'missing') {
     lines.push('**用例配置错误：缺断言**', '');
     lines.push('`scenarios/<id>/` 里没有 `assert.mjs`，本次没有开会话。补上断言，或把用例移到 `probes/`。');
@@ -199,12 +212,24 @@ export function renderReport(manifest) {
   // 只按「有没有开会话」短路，不按 broken：断言模块坏掉时会话照常跑完了，
   // 任务也建了、也清了——那种运行恰恰最需要看清单与清场结果。
   // writeUnusableRun 写的 manifest 没有 session 记录，是真正的「没跑起来」。
+  // 预设失败同样没开会话，但它**已经建出任务**：账本要看得见，--clean 才有着落（#19）。
   const ranSession = manifest.session && Object.keys(manifest.session).length > 0;
+  if (!ranSession && manifest.assertion?.status !== 'preset-failed') {
+    return [
+      runTitle(manifest),
+      '',
+      renderVerdict({ assertion: manifest.assertion, kind: manifest.kind, run: manifest.run }),
+    ].join('\n');
+  }
   if (!ranSession) {
     return [
       runTitle(manifest),
       '',
-      renderVerdict({ assertion: manifest.assertion, kind: manifest.kind }),
+      '## 预设建出的任务',
+      '',
+      created.length === 0 ? '（一条都没有建出来）' : taskTable(created),
+      '',
+      renderVerdict({ assertion: manifest.assertion, kind: manifest.kind, run: manifest.run }),
     ].join('\n');
   }
   // 首行就是三个事实，人打开报告第一眼就能回答"测的是哪份 skill、哪个模型、沙箱在哪"。
@@ -216,7 +241,7 @@ export function renderReport(manifest) {
     '',
     created.length === 0 ? '（没有创建任何任务）' : taskTable(created),
     '',
-    renderVerdict({ assertion: manifest.assertion, kind: manifest.kind }),
+    renderVerdict({ assertion: manifest.assertion, kind: manifest.kind, run: manifest.run }),
     '',
     '## 清场',
     '',

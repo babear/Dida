@@ -2,7 +2,7 @@
 
 被测 skill 的测试用例数据。机器在 `harness/`，这里只有数据。
 
-> **这份文档里 `assert.mjs` 与 `state.json` 已经实现，`preset.mjs` 还没有。** 现在 `scenario.json`、`materials/`、`assert.mjs` 都能跑：缺 `assert.mjs` 的用例会被判「用例配置错误」并直接退出、不开会话。`preset.mjs` 归 #19，探针的设计见 ADR-0015，过程断言归 #8。
+> **这份文档里 `assert.mjs`、`preset.mjs` 与 `state.json` 都已实现。** 现在 `scenario.json`、`materials/`、`preset.mjs`、`assert.mjs` 都能跑：缺 `assert.mjs` 的用例会被判「用例配置错误」并直接退出、不开会话；`preset.mjs` 写错（越界、指向已有任务、空操作、执行失败）同样拒绝该 run、不进入会话。探针的设计见 ADR-0015，过程断言归 #8。
 
 ```
 skill-tests/
@@ -61,12 +61,13 @@ export default (projects) => [
 
 - **清单从参数拿，不要 import 默认常量。** 本次 run 的清单可能被环境变量覆盖，用默认常量会建到清场的视野外，成为删不掉的孤儿。
 - **不能指向已有任务。** `--parent-id`、`task update --id`、`task delete`、`task move --task`、`comment add` 指向的任务不在账本里，写错就改到账本之外的数据。preset 里出现这类参数会被拒绝，等占位符方案落地后才放开。
-- **不能是空操作。** `--help`、裸命令组这类 argv 什么都不建，会被判为错误而不是静默通过。
+- **只支持 `task create`。** 账本记得下、清场收得回的只有它建出的任务 id。别的写命令（`project update`、`project delete`、`project column create` …）改了真实数据却记不了账，一律拒绝。
+- **不能是空操作。** `--help`、裸命令组、只读命令这类 argv 什么都不建，会被判为错误而不是静默通过。
+- **不支持无目标写命令**（`project create` 等）：建清单会突破测试清单集合的边界。需要新清单时先手工建好，再加进 `DIDA_TEST_PROJECTS`。
 - 目标清单必须 ∈ 本次清单集合，越界拒绝该 run。
-- 它建的任务和被测 agent 建的一样进本 run 的账本，清场管得到。
+- 它建的任务和被测 agent 建的一样进本 run 的账本（`origin: 'preset'`），清场管得到。
 - 只造数据结构，不造语义提示。preset 建的东西被测 agent 看得到，标题写得像答案等于给提示。
-
-> 具体的导出形态（函数参数、注入方式）由 #19 定。现在 preset 尚未实现。
+- 预设失败时**不清场**：建出的任务留在 `runs/<runId>/created.ndjson`，用 `--clean <runId>` 收尾。
 
 **不要做链式 scenario**（一条建、另一条查）。账本按 runId 隔离，后半条既断言不了也清不掉前半条的数据；单跑一条也必然缺前置数据。需要前置数据就用 preset。
 
