@@ -15,6 +15,8 @@ import {
   probeAssertNotice,
   sessionEnvOf,
   probesLeftoverLines,
+  shouldRetry,
+  runWithRetry,
   retainedSummaryLines,
   stateLine,
   takeState,
@@ -23,6 +25,7 @@ import {
   writeManifest,
   writeUnusableRun,
 } from './run.mjs';
+import { batchSummaryLines, summarizeBatch } from './lib/batch.mjs';
 
 function tmpRepo(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'run-test-'));
@@ -747,4 +750,276 @@ test('规则目录缺 rule.mjs 时抛错，交给编排层判配置错误', asyn
   const dir = writeScenario(t, { assertSource: 'export default () => [];\n' });
   fs.mkdirSync(path.join(dir, 'process', 'empty'), { recursive: true });
   await assert.rejects(() => loadScenarioAssertions({ kind: 'scenario', dir }), /rule\.mjs/);
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// 重试（#9）：只重试「会话没正常结束」——那是运行器自己没跑完，
+// 重来一次才有意义。断言未通过与结果不可用都是**结论**，要停下看原因，
+// 不是把结论推迟一次。单次全绿是否偶然归 #26 的多次运行，不在这里套重试。
+// ─────────────────────────────────────────────────────────────────────────
+
+test('会话没正常结束时重试一次：那是运行器没跑完，不是 skill 的结论', () => {
+  assert.equal(shouldRetry({ status: 'incomplete', kind: 'scenario' }), true);
+});
+
+test('断言未通过不重试：停下看它为什么没通过', () => {
+  assert.equal(shouldRetry({ status: 'failed', kind: 'scenario' }), false);
+});
+
+test('结果不可用不重试：三种原因各要看各的，重跑只是把结论推迟一次', () => {
+  for (const cause of ['state', 'cross-check', 'indeterminate']) {
+    assert.equal(shouldRetry({ status: 'invalid', cause, kind: 'scenario' }), false, `${cause} 不该重试`);
+  }
+});
+
+test('用例配置错误不重试：重跑一次不会让 broken / missing / preset-failed 变绿', () => {
+  for (const status of ['broken', 'missing', 'preset-failed']) {
+    assert.equal(shouldRetry({ status, kind: 'scenario' }), false, `${status} 不该重试`);
+  }
+});
+
+test('通过不重试：单次全绿是否偶然归 #26 的多次运行', () => {
+  assert.equal(shouldRetry({ status: 'passed', kind: 'scenario' }), false);
+});
+
+test('探针不重试：它没有判定要守，重跑只是再烧一次钱', () => {
+  assert.equal(shouldRetry({ status: 'incomplete', kind: 'probe' }), false);
+});
+
+// 快照取不到不是「重跑整条会话」的理由——会话已经跑完了，重跑是浪费一次真实 API。
+// 该重试的是取快照这个动作本身（基础设施抖动）。
+test('取快照失败时再试一次，第二次成功就算成功', (t) => {
+  const dir = tmpRepo(t);
+  const statePath = path.join(dir, 'state.json');
+  let attempts = 0;
+
+  const out = takeState({
+    statePath,
+    build: () => {
+      attempts += 1;
+      if (attempts === 1) throw new Error('网络抖动');
+      return [{ id: 'a' }];
+    },
+  });
+
+  assert.equal(out.status, 'ok');
+  assert.equal(attempts, 2, '失败一次后要真的再取一次');
+  assert.deepEqual(JSON.parse(fs.readFileSync(statePath, 'utf8')), [{ id: 'a' }]);
+});
+
+test('两次都取不到才落取快照失败（判定层会把它折成 invalid），留下最后一次的错误', (t) => {
+  const dir = tmpRepo(t);
+  const statePath = path.join(dir, 'state.json');
+  let attempts = 0;
+
+  const out = takeState({
+    statePath,
+    build: () => { attempts += 1; throw new Error(`第 ${attempts} 次网络抖动`); },
+  });
+
+  assert.equal(out.status, 'failed');
+  assert.equal(attempts, 2);
+  assert.match(out.error, /第 2 次/);
+  assert.equal(fs.existsSync(statePath), false, '取不到就不写文件');
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// 汇总（#9）：跑完一批之后要能一眼回答「几条过、几条没过、分别是什么性质」。
+// 关键是不能把 invalid 与 failed 折叠成同一个「失败」——退出码都非零，
+// 但一个去改 skill，一个去查 harness 或重跑（ADR-0012）。
+// ─────────────────────────────────────────────────────────────────────────
+
+test('汇总按结论分开计数，invalid 不折进 failed', () => {
+  const summary = summarizeBatch([
+    { scenario: 'a', status: 'passed' },
+    { scenario: 'b', status: 'failed' },
+    { scenario: 'c', status: 'invalid' },
+    { scenario: 'd', status: 'invalid' },
+  ]);
+  assert.equal(summary.counts.passed, 1);
+  assert.equal(summary.counts.failed, 1);
+  assert.equal(summary.counts.invalid, 2);
+  assert.equal(summary.total, 4);
+});
+
+test('只有全 passed 时退出码才是 0', () => {
+  assert.equal(summarizeBatch([{ scenario: 'a', status: 'passed', ok: true }]).exitCode, 0);
+  for (const status of ['failed', 'invalid', 'incomplete', 'broken']) {
+    assert.equal(summarizeBatch([{ scenario: 'a', status, ok: false }]).exitCode, 1, `${status} 应非零`);
+  }
+});
+
+test('一条 scenario 都没跑时不报绿：空批次退出码非零', () => {
+  const summary = summarizeBatch([]);
+  assert.equal(summary.total, 0);
+  assert.equal(summary.exitCode, 1);
+});
+
+// 重试通过必须标明：否则重试就成了掩盖——第一次红过这件事要从汇总里看得见。
+test('首次 incomplete、重试通过的运行在汇总里标出来', () => {
+  const summary = summarizeBatch([
+    { scenario: 'a', status: 'passed', ok: true, attempts: [{ status: 'incomplete' }, { status: 'passed' }] },
+  ]);
+  assert.equal(summary.retried.length, 1);
+  assert.equal(summary.retried[0].scenario, 'a');
+  assert.equal(summary.retried[0].firstStatus, 'incomplete');
+  assert.equal(summary.counts.passed, 1, '最终结论算 passed');
+  assert.equal(summary.exitCode, 0, '重试通过算通过');
+});
+
+test('一次就过的运行不算重试', () => {
+  const summary = summarizeBatch([
+    { scenario: 'a', status: 'passed', attempts: [{ status: 'passed' }] },
+  ]);
+  assert.deepEqual(summary.retried, []);
+});
+
+test('两连败的运行算一次失败，且在汇总里点名试了几次', () => {
+  const summary = summarizeBatch([
+    { scenario: 'a', status: 'incomplete', attempts: [{ status: 'incomplete' }, { status: 'incomplete' }] },
+  ]);
+  assert.deepEqual(summary.retried, []);
+  assert.equal(summary.counts.incomplete, 1);
+  assert.equal(summary.exitCode, 1);
+  assert.match(batchSummaryLines(summary).join('\n'), /2 次/);
+});
+
+test('判定通过但清场没干净的条目：结论不改写，单列一行、退出码非零', () => {
+  const summary = summarizeBatch([
+    { scenario: 'a', status: 'passed', ok: true },
+    { scenario: 'b', status: 'passed', ok: false },
+  ]);
+  assert.equal(summary.counts.passed, 2, '判定结论是 passed，不该被改写成 failed');
+  assert.deepEqual(summary.unusable.map((u) => u.scenario), ['b']);
+  assert.equal(summary.exitCode, 1);
+  const text = batchSummaryLines(summary).join('\n');
+  assert.match(text, /b/);
+  assert.match(text, /不可用/);
+});
+
+test('汇总行给出各结论的条数，不把没出现的结论写出来', () => {
+  const text = batchSummaryLines(summarizeBatch([
+    { scenario: 'a', status: 'passed' },
+    { scenario: 'b', status: 'failed' },
+  ])).join('\n');
+  assert.match(text, /passed 1/);
+  assert.match(text, /failed 1/);
+  assert.doesNotMatch(text, /invalid/);
+});
+
+test('汇总点名重试通过的条目：哪一条、首次是什么结论', () => {
+  const text = batchSummaryLines(summarizeBatch([
+    { scenario: 'a', status: 'passed', ok: true, attempts: [{ status: 'incomplete' }, { status: 'passed' }] },
+  ])).join('\n');
+  assert.match(text, /a/);
+  assert.match(text, /重试/);
+  assert.match(text, /incomplete/);
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// 重试循环本身。它住在 main() 里时只能靠真跑一条 scenario 来验——一次 $0.03–0.29，
+// 而且「只在 incomplete 时跑第二遍」这件事恰恰最难靠运气撞到。
+// 抽成接一次尝试的函数，把「跑几次、每次带什么 retry 说明」钉住。
+// ─────────────────────────────────────────────────────────────────────────
+
+test('incomplete 时跑第二次，第二次的 retry 里带着首次的结论与 run', async () => {
+  const seen = [];
+  const outcome = await runWithRetry({
+    kind: 'scenario',
+    attempt: async (retry) => {
+      seen.push(retry);
+      return seen.length === 1
+        ? { run: 'r1', status: 'incomplete', defer: true, ok: false }
+        : { run: 'r2', status: 'passed', defer: false, ok: true };
+    },
+  });
+
+  assert.equal(seen.length, 2);
+  assert.equal(seen[0], null, '第一次不带 retry 说明');
+  assert.deepEqual(seen[1], { attempt: 2, previousRun: 'r1', previousStatus: 'incomplete' });
+  assert.equal(outcome.status, 'passed');
+  assert.equal(outcome.attempts.length, 2);
+  assert.deepEqual(outcome.attempts.map((a) => a.status), ['incomplete', 'passed']);
+});
+
+test('断言未通过只跑一次：停下来看原因', async () => {
+  let calls = 0;
+  const outcome = await runWithRetry({
+    kind: 'scenario',
+    attempt: async () => { calls += 1; return { run: 'r1', status: 'failed', defer: true, ok: false }; },
+  });
+  assert.equal(calls, 1);
+  assert.equal(outcome.attempts.length, 1);
+});
+
+test('两连 incomplete 只跑两次，不无限重试', async () => {
+  let calls = 0;
+  const outcome = await runWithRetry({
+    kind: 'scenario',
+    attempt: async () => { calls += 1; return { run: `r${calls}`, status: 'incomplete', defer: true, ok: false }; },
+  });
+  assert.equal(calls, 2);
+  assert.equal(outcome.status, 'incomplete');
+  assert.equal(outcome.attempts.length, 2);
+});
+
+test('探针一次都不重试', async () => {
+  let calls = 0;
+  const outcome = await runWithRetry({
+    kind: 'probe',
+    attempt: async () => { calls += 1; return { run: 'r1', status: 'incomplete', defer: true, ok: false }; },
+  });
+  assert.equal(calls, 1);
+  assert.equal(outcome.status, 'incomplete');
+});
+
+// 未通过的条目不该被写成「判定通过但不可用」——那句话是留给 passed 的。
+test('重试仍不通过的条目只说试了几次，不写成「判定通过但不可用」', () => {
+  const text = batchSummaryLines(summarizeBatch([
+    { scenario: 'b', status: 'incomplete', usable: false, attempts: [{ status: 'incomplete' }, { status: 'incomplete' }] },
+  ])).join('\n');
+  assert.match(text, /试了 2 次/);
+  assert.doesNotMatch(text, /判定通过/);
+});
+
+// 探针的成功词是 sampled，不是 passed（ADR-0015）。汇总若只认 passed，
+// `npm test` 跑到探针就永远红——而全量运行本来就不该跑探针，这条守的是
+// `--scenario <探针 id>` 那一路。
+test('探针 sampled 的批次退出码是 0', () => {
+  const summary = summarizeBatch([
+    { scenario: 'p1', status: 'sampled', ok: true, attempts: [{ status: 'sampled' }] },
+  ]);
+  assert.equal(summary.exitCode, 0);
+  assert.match(batchSummaryLines(summary).join('\n'), /sampled 1/);
+});
+
+test('探针没取到样本时退出码非零，且不写成「判定通过但不可用」', () => {
+  for (const status of ['incomplete', 'invalid']) {
+    const text = batchSummaryLines(summarizeBatch([
+      { scenario: 'p1', status, ok: false, attempts: [{ status }] },
+    ])).join('\n');
+    assert.doesNotMatch(text, /判定通过/);
+  }
+});
+
+test('空批次不写「0 条（）」这种空括号', () => {
+  const text = batchSummaryLines(summarizeBatch([])).join('\n');
+  assert.doesNotMatch(text, /（）/);
+  assert.match(text, /一条都没跑/);
+});
+
+// 重试会留下两批现场：首次 incomplete 的那次不清场（ADR-0014），重试那次通过的
+// 会自动清场。清单只收最终那条的话，首次留下的任务就从「本次有 N 条现场已保留」
+// 里消失了——而那批任务确实还躺在真实清单里等人收。
+test('重试的每一次都各交一条结论，首次保留的现场不会被丢', async () => {
+  const outcome = await runWithRetry({
+    kind: 'scenario',
+    attempt: async (retry) => (retry
+      ? { run: 'r2', status: 'passed', defer: false, ok: true }
+      : { run: 'r1', status: 'incomplete', defer: true, ok: false }),
+  });
+
+  // runWithRetry 交出的是最终结论 + 全部尝试；保留清单要按每次尝试的 defer 收，
+  // 而不是只看最终那次。
+  assert.deepEqual(outcome.attempts.map((a) => [a.run, a.defer]), [['r1', true], ['r2', false]]);
 });
