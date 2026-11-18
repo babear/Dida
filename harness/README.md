@@ -20,6 +20,14 @@ npm run test:harness  # harness 自己的单元测试，不烧 API
 | `--hold` | 关 | 跑完不清场，留现场给人看；之后用 `--clean <runId>` 收尾 |
 | `--clean <runId>` | — | 只按该 run 的 `created.ndjson` 删除任务，然后退出。**不改写 `report.md`，也不覆盖 `manifest.cleanup`**——那份报告与当时的结论是那次运行的产物，收尾只把结果记到 `manifest.cleanupAfter` |
 
+回放历史运行（不烧 API，只读）：
+
+```bash
+node harness/replay.mjs --scenario <id> --run <runId>
+```
+
+它读 `runs/<runId>/calls.ndjson` 与 `state.json`，跑这条用例的 `assert.mjs` 与 `process.mjs`，打印逐条结果。用来验证断言模块在**真实日志**上的结论——写断言时应当看到「结局断言全绿、过程断言变红」。不动 manifest、不清场。
+
 退出码：任一 scenario 断言未通过、会话非零退出或超时、用例配置错误（缺 `assert.mjs`，或断言模块加载失败、没给出合法结果）、预设失败（越界、指向已有任务、空操作、执行失败）、可信度检查不过（有 dida 调用没进日志，或轨迹读不出可比的调用）、终态快照取不到、清场中止或删除失败，都是 1。
 
 ### 清场纪律

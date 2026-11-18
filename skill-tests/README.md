@@ -2,7 +2,7 @@
 
 被测 skill 的测试用例数据。机器在 `harness/`，这里只有数据。
 
-> **这份文档里 `assert.mjs`、`preset.mjs` 与 `state.json` 都已实现。** 现在 `scenario.json`、`materials/`、`preset.mjs`、`assert.mjs` 都能跑：缺 `assert.mjs` 的用例会被判「用例配置错误」并直接退出、不开会话；`preset.mjs` 写错（越界、指向已有任务、空操作、执行失败）同样拒绝该 run、不进入会话。探针的设计见 ADR-0015，过程断言归 #8。
+> **这份文档里 `assert.mjs`、`process.mjs`、`preset.mjs` 与 `state.json` 都已实现。** 缺 `assert.mjs` 的用例会被判「用例配置错误」并直接退出、不开会话；`process.mjs` 是可选的，不写就是不判过程这一面；`preset.mjs` 写错（越界、指向已有任务、空操作、执行失败）同样拒绝该 run、不进入会话。探针的设计见 ADR-0015。
 
 ```
 skill-tests/
@@ -19,6 +19,7 @@ skill-tests/
 | `materials/` | 可选。用户原话里要引用的文件，整体复制进运行目录的 `work/materials/` | 被测 agent |
 | `preset.mjs` | 可选。声明要建的任务，会话前由 harness 用真 CLI 执行 | 无 |
 | `assert.mjs` | 结局断言。默认导出 `{tasks, created, calls, session} => 结果数组` | 无 |
+| `process.mjs` | 可选。过程断言。默认导出 `{calls} => 结果数组` | 无 |
 
 判定分三面、按**严格顺序**短路：可信度检查 → 结局断言 → 过程断言，前一面不过就不算后面；会话正常结束是前置门。见 `harness/README.md` 的「判定」与 ADR-0014。
 
@@ -89,7 +90,7 @@ node harness/run.mjs --scenario <id>
 
 探针永不清场，任务与运行目录都留在现场；确认完用 `--clean <runId>` 收尾。
 
-### 4. 据此写 `assert.mjs`
+### 4. 据此写结局断言 `assert.mjs`
 
 ```js
 export default function assert({ tasks, created, calls, session }) {
@@ -110,9 +111,53 @@ export default function assert({ tasks, created, calls, session }) {
 - **按字段定位任务**，不按顺序猜。别写 `tasks[0]`——你不知道 agent 建了几条、以什么顺序建。
 - `created` 条目带 `origin: 'preset' | 'agent'`，要区分来源时用它。
 - `tasks` 里取不到的任务是 `null`（账本有 id 但任务被删了），断言要能处理。
-- 结局断言只需要 `tasks`。过程断言归 harness 全局，不要在 `assert.mjs` 里重写。
 
-### 5. 搬到 `scenarios/`，删掉探针
+### 5. 据此写过程断言 `process.mjs`（可选）
+
+**过程断言的依据和结局断言一样，是探针的调用记录。** 顺序不能反过来：先有记录里实际出现过的错误动作，再写规则。没有记录作依据的规则，要么抓不到真问题，要么把合理路径判红。
+
+读 `calls.ndjson` 时问两件事：
+
+1. **正确步骤是什么**——这条用例的意图对应哪几步 dida 调用？
+2. **哪些动作是错的**——记录里实际出现了、且已确认属于缺陷的动作（对照 spec 的「先行验证过的事实」）。
+
+```js
+// 默认导出，只收调用日志：轨迹归可信度检查，终态快照归结局断言。
+export default function processAssert({ calls }) {
+  const wrong = calls.find((c) => /* 那个已确认的错误动作 */);
+  return [{
+    ok: !wrong,
+    name: '不存在「……再……」的动作',
+    expected: '一次做对',
+    actual: wrong ? `第 N 条调用了 ……` : '没有出现',
+  }];
+}
+```
+
+- **只写禁止式**，不写「必须先读再改」这类正面剧本：另一种同样正确的写法会被误判为失败（ADR-0005）。
+- **一个动作不一定每次运行都会出现。** 这条用例的目的就是盯住它复现不复发；没出现就是绿。
+- **规则自己也要有测试**：同目录放 `process.test.mjs`，用真实记录里的调用原样当夹具，验证命中与不误报。
+- 过程断言**不是**这条用例的必写项。一条用例未必有已确认的过程缺陷；没写就是不判，报告写「过程断言 未判」。
+- **动作要稳定复现才值得写。** 只在一次记录里出现过、换个模型或换次运行就不出现的动作，写成规则只会时红时绿。先重跑一两次，确认它稳定出现，再写。
+
+### 6. 用回放验证断言（不烧 API）
+
+写完之后，先拿探针（或任意历史 run）的事实回放一遍：
+
+```bash
+node harness/replay.mjs --scenario <id> --run <runId>
+```
+
+它只读 `runs/<runId>/calls.ndjson` 与 `state.json`，跑这条用例的 `assert.mjs` 与 `process.mjs`，打印逐条结果。
+
+期望的形状是**结局断言全绿、过程断言变红**：
+
+- 回放里结局断言红了 → 断言写错了，或者这条用例复现不了缺陷（假测试）。
+- 回放里过程断言绿了 → 规则没抓到那次真实发生过的动作。回去看 `calls.ndjson`，是不是判据写窄了。
+
+回放不动 manifest、不清场、不烧 API，可以反复改反复跑。确认形状对了再进下一步。
+
+### 7. 搬到 `scenarios/`，删掉探针
 
 ```bash
 git mv skill-tests/probes/<id> skill-tests/scenarios/<id>
@@ -120,13 +165,19 @@ git mv skill-tests/probes/<id> skill-tests/scenarios/<id>
 
 探针的源目录跑完就删，运行现场按需用 `--clean` 收尾。`probes/` 里还留着源目录说明流程没走完，全量运行的汇总末尾会提醒。
 
-### 6. 验证红绿
+### 8. 验证红绿
 
 ```bash
 node harness/run.mjs --scenario <id>   # 当前 skill 上必须红（退出码 1）
 ```
 
-红不了说明这条 scenario 复现不了缺陷，是假测试——回第 1 步重写原话。改过 skill 之后再跑一次，必须绿（退出码 0）。这就是「复现价」。
+这是**复现价**：未修的 skill 上这次真跑必须失败，并且报告要写明是哪一面红的——`结局断言 未通过`（没做到）还是 `过程断言 未通过`（做到了但绕了远路）。
+
+改过 skill 之后再跑一次，必须绿（退出码 0）。
+
+> 回放只能证明规则在**已知**日志上判得对；它不能代替这一次真跑。探针取样时的结论可能和回放不同（agent 每次路径都不一样），以真跑为准。
+>
+> **真跑也可能把这个动作跑不出来。** 2026-11-18 的 `checklist-desc-field` 就是这样：11-17 的 5 次记录全部「先写字符串数组 `--items`、再 update 补正」，于是据此写了 `process.mjs`；11-18 重跑一次，agent 直接用对象数组一次建对，过程断言绿了。这说明那个动作**不稳定**，不适合当过程断言的判据——删掉它，改去修 skill（`task.md` 从没写过 `--items` 的格式，agent 每次都在猜）。判据稳定复现，才值得写成规则。
 
 ## 常见的坑
 
