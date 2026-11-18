@@ -15,7 +15,6 @@ import {
   sessionEnvOf,
   probesLeftoverLines,
   retainedSummaryLines,
-  staleRuleLines,
   stateLine,
   takeState,
   verdictLines,
@@ -294,34 +293,26 @@ test('过程断言失败时控制台说「过程断言未通过」，不说成�
   const text = verdictLines({
     status: 'failed',
     surface: 'process',
-    results: [{ ok: false, name: '不存在建带 --items 的任务后删除重建', expected: '没有出现', actual: '第 3、5、7 条' }],
+    process: {
+      evaluated: true,
+      results: [{ ok: false, name: '不存在建带 --items 的任务后删除重建', expected: '没有出现', actual: '第 3、5、7 条' }],
+    },
+    // 结局断言这一面是通过的：它的项不该让控制台多打一行，也不该被当成过程那面
+    results: [{ ok: true, name: '父任务正文非空' }],
   }).join('\n');
   assert.match(text, /过程断言未通过 不存在建带 --items 的任务后删除重建/);
   assert.doesNotMatch(text, /结局断言/);
+  assert.equal(text.split('\n').length, 1, '只打过程那一条失败项，不把通过项也刷出来');
 });
 
 test('两面都通过时控制台不打印任何失败行', () => {
   assert.deepEqual(verdictLines({
     status: 'passed',
-    process: { ruleCount: 0 },
+    process: { evaluated: false, results: [] },
     results: [{ ok: true, name: '父任务正文非空' }],
   }), []);
 });
 
-// 规则的证据来源可追溯：来源用例被删掉之后，规则失去了「确认真实发生过」的凭据。
-// 这是流程提醒，不是失败——与 probes/ 残留同类。
-test('来源用例被删掉时提醒这条规则失去了证据', () => {
-  const lines = staleRuleLines([
-    { id: 'r1', desc: '不存在删除后再建', discoveredBy: 'gone-scenario' },
-  ]).join('\n');
-  assert.match(lines, /r1/);
-  assert.match(lines, /gone-scenario/);
-  assert.match(lines, /证据/);
-});
-
-test('来源都还在时不提醒', () => {
-  assert.deepEqual(staleRuleLines([]), []);
-});
 
 // 清场门控（ADR-0014）：只有 PASSED 才清场。这张表是判定结果与清场动作的唯一映射，
 // 逐状态钉住——旧门控是「会话没正常结束才不清场」，断言失败照清，

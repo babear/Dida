@@ -326,7 +326,11 @@ test('过程断言未通过写成「做到了但绕了远路」，不写成「�
     assertion: {
       status: 'failed',
       surface: 'process',
-      results: [{ ok: false, name: '不存在建带 --items 的任务后删除重建', expected: '没有出现', actual: '第 3、5、7 条' }],
+      process: {
+        evaluated: true,
+        results: [{ ok: false, name: '不存在建带 --items 的任务后删除重建', expected: '没有出现', actual: '第 3、5、7 条' }],
+      },
+      results: [{ ok: true, name: '父任务正文非空' }],
     },
   });
   assert.match(text, /过程断言 未通过/);
@@ -334,6 +338,7 @@ test('过程断言未通过写成「做到了但绕了远路」，不写成「�
   assert.match(text, /不存在建带 --items 的任务后删除重建/);
   assert.doesNotMatch(text, /结局断言 未通过/);
   assert.doesNotMatch(text, /skill 没做到/);
+  assert.doesNotMatch(text, /父任务正文非空/, '通过的那几条不刷屏');
 });
 
 test('结局断言未通过时不说成过程断言——两面的指引不同', () => {
@@ -345,31 +350,32 @@ test('结局断言未通过时不说成过程断言——两面的指引不同',
   assert.doesNotMatch(text, /绕了远路/);
 });
 
-test('两面都通过时报告写通过，不点名任何规则', () => {
+test('两面都通过时报告写通过，不点名任何断言', () => {
   const text = renderVerdict({
     assertion: {
       status: 'passed',
-      process: { ruleCount: 1 },
-      results: [
-        { ok: true, name: '父任务正文非空' },
-        { ok: true, name: '不存在删除后再建' },
-      ],
+      process: { evaluated: true, results: [{ ok: true, name: '不存在删除后再建' }] },
+      results: [{ ok: true, name: '父任务正文非空' }],
     },
   });
   assert.match(text, /结局断言 通过/);
   assert.match(text, /过程断言 通过/);
   assert.doesNotMatch(text, /父任务正文非空/);
+  assert.doesNotMatch(text, /不存在删除后再建/);
 });
 
-// 规则表为空时那是「没有规则可过」，不是「过了 0 条」——写出来会让人以为检查做了。
-test('规则表为空时不写过程断言那一行', () => {
+// 这条用例没写 process.mjs：过程那一面根本没判。写「通过」是把没做的事说成做了。
+test('没写过程断言时报告写明「未判」，不写「通过」', () => {
   const text = renderVerdict({
-    assertion: { status: 'passed', process: { ruleCount: 0 }, results: [{ ok: true, name: '父任务正文非空' }] },
+    assertion: { status: 'passed', process: { evaluated: false, results: [] }, results: [{ ok: true, name: 'x' }] },
   });
   assert.match(text, /结局断言 通过/);
-  assert.doesNotMatch(text, /过程断言/);
+  assert.match(text, /过程断言 未判/);
+  assert.doesNotMatch(text, /过程断言 通过/);
 });
 
+// 旧 manifest 没有 process 字段（--clean 会用它重渲染）：不写过程那一行，
+// 因为那时根本没有过程断言这东西。
 test('旧 manifest（没有 process 字段）不写过程断言那一行', () => {
   const text = renderVerdict({ assertion: { status: 'passed', results: [] } });
   assert.match(text, /结局断言 通过/);

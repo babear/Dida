@@ -53,6 +53,7 @@ npm run test:harness  # harness 自己的单元测试，不烧 API
 | `materials/` | 可选，整体复制进运行目录的 `work/materials/` | 是 | 已有 |
 | `preset.mjs` | 可选，声明要建的任务，会话前由 harness 用真 CLI 执行 | 否 | 已有 |
 | `assert.mjs` | 结局断言，默认导出 `{tasks, created, calls, session} => 结果数组` | 否 | 已有 |
+| `process.mjs` | 可选，过程断言，默认导出 `{calls} => 结果数组`；缺省则不判过程这一面 | 否 | 已有 |
 
 加一条 scenario 就是加一个目录，harness 一行不用改（前提是 `assert.mjs` 与 `preset.mjs` 已实现）。目录形态与三面判定的完整理由见 ADR-0012。
 
@@ -102,7 +103,7 @@ npm run test:harness  # harness 自己的单元测试，不烧 API
 
 1. **可信度检查**：从轨迹里每次 `PowerShell` 调用的命令字符串中抽出 dida 调用，与调用日志的 argv 逐条对；对不上的那几次就是没走过 shim。与 dida 无关的命令（`Get-ChildItem`、`New-Item` 等）不参与判断；轨迹读不出事件、或命令里出现 dida 却解析不出（如 `$cmd = "dida"; & $cmd task create`）则判无从比对。三态：`consistent` / `inconsistent` / `indeterminate`，后两种都标 `invalid` 而非 `fail`——退出码同样非零，但语义是"结果不可用"，不是 skill 有缺陷。**不过即终止，不取快照、不跑断言。**
 2. **取快照 ＋ 结局断言**：读终态快照 `runs/<runId>/state.json`——账本里每个 id 取回的任务现状，取不到的记 `null`。定位与清场同一套：先按测试清单枚举再按 id 找，因为 agent 可能用 `task move` 挪走任务；枚举不到才回退到账本记的 `projectId` 直查。快照在断言这一刻取，不在会话结束时取。
-3. **过程断言**：判定链的第三面，只读调用日志的 argv 序列，不读轨迹与快照。它的规则表 `harness/lib/processassert.mjs` 是**凭证据准入**的——每条规则对应一次真实会话确认过的缺陷动作，`discoveredBy` 指向暴露它的那条 scenario。**当前表为空**：仓库里还没有第一条真实 scenario 跑出过证据，所以这一面现在一条不判，`passed` 与加这条机制之前完全一致。往里加规则前先跑一次真实会话，再把来源用例填进去；来源用例被删掉时全量运行会提醒「规则失去了证据」（ADR-0005）。
+3. **过程断言**：判定链的第三面，写成 `scenarios/<id>/process.mjs`，与 `assert.mjs` 对称。它收 `{ calls }`（只有调用日志，不读轨迹与快照），返回 `{ok, name, expected, actual}[]`。**缺省允许**——没写的用例不判过程这一面，报告写「过程断言 未判」，不写「通过」。规则按用例各写一份、不设全局表：同一个缺陷在几条用例都相关时会有重复，换的是「看一条用例的文件就知道它要求的过程是什么」。写之前先看真实会话的调用记录，弄清正确步骤和已确认的错误动作（ADR-0005 的 2026-11-18 补充）。
 
 **越界写入不进判定。** shim 当场拒绝并把 `decision: 'rejected'` / `reason: 'out-of-bounds'` 写进调用日志，报告按原因单列次数——但它是**被拦住的尝试**，归因可能是 agent 用错命令、scenario 原话没点名测试清单、或 guard 表没覆盖这条命令，不是「skill 没做到」。判成 `FAILED` 会把这三类不该红的运行变红，所以它只进报告供人判断。
 
@@ -119,7 +120,7 @@ npm run test:harness  # harness 自己的单元测试，不烧 API
 | `PRESET FAILED` | `preset.mjs` 越界、指向已有任务、空操作或执行失败：不建运行目录、不开会话、不清场 | 改 `preset.mjs`；已建的任务用 `--clean <runId>` 收尾 |
 | `NOT FOUND` | `--scenario` 写错 id | 改正 id |
 
-过程断言已于 #8 接入判定链，规则表当前为空（见上「判定」小节）。可信度判据已于 #18 从「比条数」改为逐调用比对：轨迹里的 dida 调用与调用日志逐条对，与 dida 无关的 PowerShell 命令不参与判断。
+过程断言已于 #8 接入判定链，按 scenario 写在 `process.mjs` 里（见上「判定」小节）。可信度判据已于 #18 从「比条数」改为逐调用比对：轨迹里的 dida 调用与调用日志逐条对，与 dida 无关的 PowerShell 命令不参与判断。
 
 ## 运行目录
 

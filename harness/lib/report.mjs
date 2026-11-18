@@ -206,9 +206,10 @@ export function renderVerdict({ assertion, kind, run }) {
   if (assertion?.status === 'failed') {
     // 第三面（ADR-0005）与第二面都判 failed，含义相反：结局失败是「没做到」，
     // 过程失败是「做到了，但绕了远路」。两句话分开写，指引才不会指错。
+    // 过程断言的失败项在 process.results 里，results 只放结局断言那几条。
     const process = assertion.surface === 'process';
     lines.push(process ? '**过程断言 未通过：做到了，但绕了远路**' : '**结局断言 未通过：skill 没做到**');
-    lines.push('', renderAssertions(assertion.results ?? []));
+    lines.push('', renderAssertions(process ? (assertion.process?.results ?? []) : (assertion.results ?? [])));
     lines.push('', '去改 skill。同样的 skill 再跑一次不会变绿。');
     return lines.join('\n');
   }
@@ -216,10 +217,13 @@ export function renderVerdict({ assertion, kind, run }) {
   // 落到这里写「通过」等于给一次没评过的运行发绿灯。
   if (assertion?.status === 'passed') {
     lines.push('结局断言 通过');
-    // 规则表为空时这一行不出现：「过了 0 条」不是通过，是没有规则可过。
-    // 条数取自判定链给出的 process 字段，不靠结果名字去猜。
-    if (assertion.process?.ruleCount > 0) {
-      lines.push(`过程断言 通过（${assertion.process.ruleCount} 条规则）`);
+    // 过程那一面有三种状态，不能混：没写 process.mjs（未判）/ 跑了全过（通过）/
+    // 旧 manifest 没有这个字段（不写）。「未判」写成「通过」是把没做的事说成做了。
+    if (assertion.process?.evaluated === true) {
+      const count = assertion.process.results?.length ?? 0;
+      lines.push(`过程断言 通过（${count} 条）`);
+    } else if (assertion.process?.evaluated === false) {
+      lines.push('过程断言 未判（这条用例没有 `process.mjs`）');
     }
     return lines.join('\n');
   }
