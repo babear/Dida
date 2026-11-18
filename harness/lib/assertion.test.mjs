@@ -324,6 +324,140 @@ test('返回值里带着这次判定用的快照，供调用方落 manifest', as
 // 旧签名（completed / crossCheck / takeSnapshot）已作废：两处各判一次会让
 // 「共享段说没取、断言那一面说取了」的分叉重新出现。接错线要立刻炸，
 // 而不是静默返回一个没结论的对象滑进报告。
+// ─────────────────────────────────────────────────────────────────────────
+// 过程断言：判定链第三面（ADR-0005 / ADR-0014）。只有结局断言通过才判——
+// 没做到的话，谈有没有绕远路没有意义。
+// ─────────────────────────────────────────────────────────────────────────
+
+// 过程规则只读调用日志（AC）。传一个只认 calls 的替身，顺带钉住「不看轨迹与快照」。
+const evaluateRules = (result) => {
+  let seen;
+  const fn = (calls) => {
+    seen = calls;
+    return result;
+  };
+  fn.seen = () => seen;
+  return fn;
+};
+
+test('结局断言不通过时不跑过程断言——没做到，不谈绕没绕远路', async () => {
+  let called = 0;
+  const out = await decideAssertion({
+    sample: sampled(),
+    assertionFn: () => [{ ok: false, name: '父任务应为 TEXT', expected: 'TEXT', actual: 'CHECKLIST' }],
+    input: INPUT,
+    evaluateRules: () => { called += 1; return { ok: true, results: [] }; },
+  });
+  assert.equal(out.status, 'failed');
+  assert.equal(out.surface, undefined, '结局断言失败时不该标成过程面');
+  assert.equal(called, 0);
+});
+
+test('结局断言坏掉（broken）时同样不跑过程断言', async () => {
+  let called = 0;
+  const out = await decideAssertion({
+    sample: sampled(),
+    assertionFn: () => { throw new Error('崩了'); },
+    input: INPUT,
+    evaluateRules: () => { called += 1; return { ok: true, results: [] }; },
+  });
+  assert.equal(out.status, 'broken');
+  assert.equal(called, 0);
+});
+
+test('结局断言通过后跑过程断言，全过 → passed，结果里带着过程规则那几条', async () => {
+  const out = await decideAssertion({
+    sample: sampled(),
+    assertionFn: () => [{ ok: true, name: '父任务正文非空', expected: '非空', actual: '非空' }],
+    input: INPUT,
+    evaluateRules: evaluateRules({ ok: true, results: [{ ok: true, name: '不存在删除后再建' }] }),
+  });
+  assert.equal(out.status, 'passed');
+  assert.equal(out.results.length, 2, '两面都通过时结果合在一起，报告不丢过程规则');
+});
+
+test('过程断言不通过 → failed，且标成过程面，与结局断言失败区分开', async () => {
+  const out = await decideAssertion({
+    sample: sampled(),
+    assertionFn: () => [{ ok: true, name: '父任务正文非空', expected: '非空', actual: '非空' }],
+    input: INPUT,
+    evaluateRules: evaluateRules({
+      ok: false,
+      results: [{ ok: false, name: '不存在建带 --items 的任务后删除重建', expected: '没有出现', actual: '第 3 条建、第 5 条删、第 7 条重建' }],
+    }),
+  });
+  assert.equal(out.status, 'failed');
+  assert.equal(out.surface, 'process');
+});
+
+test('过程规则只收到调用日志，收不到快照与轨迹', async () => {
+  const rules = evaluateRules({ ok: true, results: [] });
+  const calls = [{ argv: ['task', 'get'] }];
+  await decideAssertion({
+    sample: sampled(),
+    assertionFn: () => [{ ok: true }],
+    input: { ...INPUT, calls },
+    evaluateRules: rules,
+  });
+  assert.deepEqual(rules.seen(), calls);
+});
+
+test('没传过程规则时按空表判——机制在，规则还没登记', async () => {
+  const out = await decideAssertion({
+    sample: sampled(),
+    assertionFn: () => [{ ok: true }],
+    input: INPUT,
+  });
+  assert.equal(out.status, 'passed');
+});
+
+test('过程规则自己抛异常 → broken，指向 harness 而不是 skill', async () => {
+  const out = await decideAssertion({
+    sample: sampled(),
+    assertionFn: () => [{ ok: true }],
+    input: INPUT,
+    evaluateRules: () => { throw new Error('规则写坏了'); },
+  });
+  assert.equal(out.status, 'broken');
+  assert.match(out.detail, /过程断言规则/);
+});
+
+// 规则的 check 自己抛异常（不是整个求值函数抛）：规则是我们自己的代码，
+// 它坏了是 harness 的缺陷，必须判 broken——判 failed 会让报告叫人不该改的 skill（ADR-0005 补充）。
+test('单条规则的 check 抛异常同样判 broken，不判 failed', async () => {
+  const { evaluateProcessRules } = await import('./processassert.mjs');
+  const out = await decideAssertion({
+    sample: sampled(),
+    assertionFn: () => [{ ok: true }],
+    input: INPUT,
+    evaluateRules: (calls) => evaluateProcessRules(calls, [{
+      id: 'boom',
+      desc: '会炸的规则',
+      discoveredBy: 'x',
+      check: () => { throw new Error('规则内部崩了'); },
+    }]),
+  });
+  assert.equal(out.status, 'broken', '规则坏掉是 harness 缺陷，不是 skill 没做到');
+  assert.equal(out.surface, 'process', '报告要靠它区分改用例还是改 harness');
+  assert.match(JSON.stringify(out.results), /规则内部崩了/);
+});
+
+// 规则 check 返回的不是带布尔 ok 的对象：与结局断言同口径，属于规则写错了。
+test('规则 check 返回非法结果时判 broken，不静默当成通过', async () => {
+  const { evaluateProcessRules } = await import('./processassert.mjs');
+  for (const bad of [undefined, {}, { ok: 'yes' }, null]) {
+    const out = await decideAssertion({
+      sample: sampled(),
+      assertionFn: () => [{ ok: true }],
+      input: INPUT,
+      evaluateRules: (calls) => evaluateProcessRules(calls, [
+        { id: 'bad', desc: '返回非法结果的规则', discoveredBy: 'x', check: () => bad },
+      ]),
+    });
+    assert.equal(out.status, 'broken', `返回 ${JSON.stringify(bad)} 时不该当成通过`);
+  }
+});
+
 test('只传旧字段、不传 sample 时立刻报错', async () => {
   let called = 0;
   let taken = 0;

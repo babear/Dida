@@ -2,6 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
+import { evaluateProcessRules } from './processassert.mjs';
+
 // 缺文件返回 null 而不是抛错：调用方要能区分「没写断言」（用例配置错误）
 // 与「断言模块坏了」（同样判失败，但原因不同）。
 export async function loadAssert(scenarioDir) {
@@ -98,16 +100,60 @@ export function takeSample({ completed, crossCheck, takeSnapshot }) {
   return { status: 'sampled', results: [], snapshot };
 }
 
-// 一条 scenario 的结局判定：拿一份已经取好的快照跑断言。
+// 一条 scenario 的判定链后半段：结局断言 → 过程断言（ADR-0005 / ADR-0014）。
 // 会话门与可信度检查已由 takeSample 做完（ADR-0015）——这里不再自己判一遍，
 // 两处各判一次就会出现「共享段说没取、这里说取了」的分叉。
-export async function decideAssertion({ sample, assertionFn, input }) {
+//
+// 严格顺序短路（ADR-0014）：结局断言不过就终止，过程断言不跑——
+// 没做到的话，谈有没有绕远路没有意义。
+export async function decideAssertion({ sample, assertionFn, input, evaluateRules = evaluateProcessRules }) {
   // 缺 sample 是调用方接错了线（旧签名传的是 completed / takeSnapshot）。
   // 静默返回一个没结论的对象会让它一路滑到报告里，那里只会显示「未评断言」。
   if (!sample) throw new Error('decideAssertion 需要 sample：先调 takeSample');
   if (sample.status !== 'sampled') return sample;
 
-  return { ...(await runOutcome(assertionFn, { ...input, tasks: sample.snapshot.state })), snapshot: sample.snapshot };
+  const outcome = await runOutcome(assertionFn, { ...input, tasks: sample.snapshot.state });
+  if (outcome.status !== 'passed') return { ...outcome, snapshot: sample.snapshot };
+
+  const process = runProcess(evaluateRules, input.calls ?? []);
+  // 规则自己坏掉（抛异常 / 返回非法形状）是 harness 的缺陷：判 broken 而不是 failed，
+  // 否则报告会写「绕了远路」并叫人去改 skill——改错了地方（ADR-0005 的 2026-11-18 补充）。
+  if (process.error || process.threw) {
+    return {
+      status: 'broken',
+      // 同 failed 一样要标面：报告靠它区分「改用例」还是「改 harness」。
+      surface: 'process',
+      detail: process.error
+        ? `过程断言规则抛异常：${process.error}`
+        : '过程断言规则没给出合法结果（抛异常或缺布尔 ok）：去修 harness 的规则表，不是改 skill',
+      results: process.results,
+      snapshot: sample.snapshot,
+    };
+  }
+  return {
+    status: process.ok ? 'passed' : 'failed',
+    // 哪一面红的：过程断言与结局断言都会给出 failed，报告与指引不同（去改 skill，但改的不是同一处）。
+    ...(process.ok ? {} : { surface: 'process' }),
+    // 规则条数单独给出，报告据此决定写不写「过程断言 通过」——
+    // 从结果数组里按名字反推属于哪一面太脆。
+    process: { ruleCount: process.ruleCount },
+    results: [...outcome.results, ...process.results],
+    snapshot: sample.snapshot,
+  };
+}
+
+// 过程规则是我们自己的代码：求值函数整体抛异常说明 harness 坏了，不是 skill 没做到。
+// 折成 broken，与断言模块坏掉同一个出口——去修代码，不是去改 skill。
+function runProcess(evaluateRules, calls) {
+  try {
+    const { ok, threw = false, results } = evaluateRules(calls);
+    return { ok, threw, results, ruleCount: results.length };
+  } catch (error) {
+    return {
+      error: error.message,
+      results: [{ ok: false, name: '过程断言规则', expected: '能给出结论', actual: error.message }],
+    };
+  }
 }
 
 // 可信度失败时的结论；通过时返回 null。

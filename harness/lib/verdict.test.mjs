@@ -318,7 +318,109 @@ test('可信度失败（会话正常结束）时也不出现会话中断的措�
   assert.doesNotMatch(text, /会话在此终止/);
 });
 
-// 预设失败（#19）：这次 run 在建运行目录之前就停了，判定链无从开始。
+// 过程断言是第三面（ADR-0005）。它与结局断言一样判 failed，但含义相反：
+// 结局失败是「没做到」，过程失败是「做到了，但绕了远路」。两句话必须分开，
+// 否则读者会照着「改 skill」的指引去改错的地方。
+test('过程断言未通过写成「做到了但绕了远路」，不写成「没做到」', () => {
+  const text = renderVerdict({
+    assertion: {
+      status: 'failed',
+      surface: 'process',
+      results: [{ ok: false, name: '不存在建带 --items 的任务后删除重建', expected: '没有出现', actual: '第 3、5、7 条' }],
+    },
+  });
+  assert.match(text, /过程断言 未通过/);
+  assert.match(text, /绕了远路/);
+  assert.match(text, /不存在建带 --items 的任务后删除重建/);
+  assert.doesNotMatch(text, /结局断言 未通过/);
+  assert.doesNotMatch(text, /skill 没做到/);
+});
+
+test('结局断言未通过时不说成过程断言——两面的指引不同', () => {
+  const text = renderVerdict({
+    assertion: { status: 'failed', results: [{ ok: false, name: '父任务应为 TEXT', expected: 'TEXT', actual: 'CHECKLIST' }] },
+  });
+  assert.match(text, /结局断言 未通过/);
+  assert.doesNotMatch(text, /过程断言/);
+  assert.doesNotMatch(text, /绕了远路/);
+});
+
+test('两面都通过时报告写通过，不点名任何规则', () => {
+  const text = renderVerdict({
+    assertion: {
+      status: 'passed',
+      process: { ruleCount: 1 },
+      results: [
+        { ok: true, name: '父任务正文非空' },
+        { ok: true, name: '不存在删除后再建' },
+      ],
+    },
+  });
+  assert.match(text, /结局断言 通过/);
+  assert.match(text, /过程断言 通过/);
+  assert.doesNotMatch(text, /父任务正文非空/);
+});
+
+// 规则表为空时那是「没有规则可过」，不是「过了 0 条」——写出来会让人以为检查做了。
+test('规则表为空时不写过程断言那一行', () => {
+  const text = renderVerdict({
+    assertion: { status: 'passed', process: { ruleCount: 0 }, results: [{ ok: true, name: '父任务正文非空' }] },
+  });
+  assert.match(text, /结局断言 通过/);
+  assert.doesNotMatch(text, /过程断言/);
+});
+
+test('旧 manifest（没有 process 字段）不写过程断言那一行', () => {
+  const text = renderVerdict({ assertion: { status: 'passed', results: [] } });
+  assert.match(text, /结局断言 通过/);
+  assert.doesNotMatch(text, /过程断言/);
+});
+
+// 预先验收标准：报告能区分 passed / failed / broken / invalid 四类。
+// 四种各渲染一次，两两之间不能串台。
+test('四类结论两两互不冒充', () => {
+  const passed = renderVerdict({ assertion: { status: 'passed', results: [] } });
+  const failed = renderVerdict({ assertion: { status: 'failed', results: [{ ok: false, name: 'x', expected: 1, actual: 2 }] } });
+  const broken = renderVerdict({ assertion: { status: 'broken', detail: '断言模块没法给出结果', results: [] } });
+  const invalid = renderVerdict({ assertion: { status: 'invalid', cause: 'state', detail: '快照取不到', results: [] } });
+
+  assert.match(passed, /通过/);
+  assert.match(failed, /未通过/);
+  assert.match(broken, /用例配置错误/);
+  assert.match(invalid, /不可用/);
+  // broken 与 invalid 都不是 skill 缺陷，不能写成「去改 skill」；passed 不能写任何「未通过」。
+  assert.doesNotMatch(passed, /未通过/);
+  assert.doesNotMatch(broken, /结局断言 未通过/);
+  assert.doesNotMatch(invalid, /结局断言 未通过/);
+});
+
+test('过程规则自己抛异常判 broken（去修 harness），不判 failed（去改 skill）', () => {
+  const text = renderVerdict({
+    assertion: { status: 'broken', detail: '过程断言规则抛异常：规则写坏了', results: [] },
+  });
+  assert.match(text, /用例配置错误/);
+  assert.match(text, /规则写坏了/);
+  assert.doesNotMatch(text, /绕了远路/);
+});
+
+// broken 有两个来源：断言模块坏了（改用例）与过程规则坏了（改 harness）。
+// 同一句「断言没给出结果」会把修 harness 的人引去改 assert.mjs，标题要分开。
+test('过程规则坏掉时，标题指向 harness 而不是 assert.mjs', () => {
+  const text = renderVerdict({
+    assertion: { status: 'broken', surface: 'process', detail: '过程断言规则抛异常：x', results: [] },
+  });
+  assert.match(text, /过程断言规则/);
+  assert.match(text, /harness/);
+  assert.doesNotMatch(text, /assert\.mjs/);
+});
+
+test('断言模块坏掉时，标题仍指向 assert.mjs', () => {
+  const text = renderVerdict({
+    assertion: { status: 'broken', detail: '断言模块没能给出结果数组', results: [] },
+  });
+  assert.match(text, /assert\.mjs/);
+  assert.doesNotMatch(text, /harness/);
+});
 // 措辞要指向 preset.mjs，并点名账本还在、--clean 收得到。
 test('预设失败时报告说明没进入会话，并指向 preset.mjs', () => {
   const text = renderVerdict({

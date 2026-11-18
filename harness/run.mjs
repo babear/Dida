@@ -11,11 +11,12 @@ import { defaultSettingsPath, ensureRunsDir, gitState, modelInfo, runId } from '
 import { listProbes, listScenarios, loadScenario } from './lib/scenario.mjs';
 import { decideAssertion, loadAssert, takeSample } from './lib/assertion.mjs';
 import { buildState } from './lib/state.mjs';
-import { crossCheck, crossCheckStatus, outOfBoundsCalls, parseCallLog, rejectedCalls } from './lib/calllog.mjs';
+import { countRejectedReasons, crossCheck, crossCheckStatus, outOfBoundsCalls, parseCallLog, rejectedCalls } from './lib/calllog.mjs';
 import { readCreated } from './lib/created.mjs';
 import { cleanRun } from './lib/cleanup.mjs';
 import { runPreset } from './lib/preset.mjs';
 import { resolveTestProjects } from './lib/projects.mjs';
+import { PROCESS_RULES, staleRuleSources } from './lib/processassert.mjs';
 import { formatValue, INCOMPLETE_FACT, invalidLabel, renderReport, retentionNote } from './lib/report.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -230,11 +231,27 @@ export function verdictLines(assertion) {
   if (assertion.status === 'incomplete') lines.push(`    会话没正常结束，判定链未开始：${INCOMPLETE_FACT}。`);
   // invalid 的失败项指向 harness 自己（快照取不到 / 调用日志对不上 / 轨迹读不出），
   // 不是断言不通过——措辞要分开，否则控制台会把基础设施故障或防护缺陷读成 skill 缺陷。
+  // 结局断言与过程断言（第三面）都判 failed，也各有各的说法：
+  // 前者是「没做到」，后者是「做到了但绕了远路」（ADR-0005）。
   for (const result of assertion.results.filter((r) => !r.ok)) {
-    const label = assertion.status === 'invalid' ? invalidLabel(assertion.cause) : '断言未通过';
+    const label = assertion.status === 'invalid'
+      ? invalidLabel(assertion.cause)
+      : (assertion.surface === 'process' ? '过程断言未通过' : '断言未通过');
     lines.push(`    ${label} ${result.name}：期望 ${formatValue(result.expected)}，实际 ${formatValue(result.actual)}`);
   }
   return lines;
+}
+
+// 规则的证据来源是可追溯的：discoveredBy 指向的用例被删掉或被改名之后，
+// 这条规则失去了「当初确认真实发生过」的凭据。全量运行时提醒，不判失败——
+// 它说明流程没走完，不是哪条用例没通过（与 probes/ 残留提醒同类）。
+export function staleRuleLines(stale) {
+  if (stale.length === 0) return [];
+  return [
+    `有 ${stale.length} 条过程规则的来源用例已不存在（规则失去了当初的证据）：`,
+    ...stale.map((rule) => `  ${rule.id}（来源 ${rule.discoveredBy ?? '未登记'}）`),
+    '  补一条能触发它的用例，或把规则从 PROCESS_RULES 里移除。',
+  ];
 }
 
 // 会话进程的启动参数。cwd 取 work/ 而不是整个运行目录——shim、配置、工具面定义都在
@@ -402,6 +419,9 @@ async function runOne(options, scenario, projects, assertionFn) {
       unparseable: calls.filter((c) => c.unparseable).length,
       rejected: rejectedCalls(calls).length,
       outOfBounds: outOfBoundsCalls(calls).length,
+      // 按 reason 分开计数：四类归因不同（改 agent 命令 / 改 scenario / 改 guard），
+      // 合成两桶会把「guard 没覆盖这条命令」藏起来（ADR-0005 2026-11-18 补充）。
+      rejectedReasons: countRejectedReasons(calls),
       crossCheck: credibility,
     },
     created,
@@ -745,9 +765,12 @@ async function main() {
   // 批跑汇总（ADR-0014）：失败即留现场，跑十条挂六条就是六批任务。
   // 没有这份清单，人下次打开客户端无从追溯该收哪几条。
   for (const line of retainedSummaryLines(retainedRuns)) console.log(line);
-  // 探针不参与全量运行，但残留在 probes/ 里说明流程没走完（ADR-0015）。
-  // 只在全量运行时提醒：单跑一条探针时它本来就该待在那儿。
-  if (!options.scenario) for (const line of probesLeftoverLines(listProbes(repoRoot))) console.log(line);
+  // 流程提醒只在全量运行时给：单跑一条用例时，probes/ 里待着的探针本来就该在，
+  // 别的用例的来源状态也不该在这次运行的输出里插话。两条提醒同一个门控。
+  if (!options.scenario) {
+    for (const line of probesLeftoverLines(listProbes(repoRoot))) console.log(line);
+    for (const line of staleRuleLines(staleRuleSources(PROCESS_RULES, listScenarios(repoRoot)))) console.log(line);
+  }
   if (failures > 0) process.exitCode = 1;
 }
 

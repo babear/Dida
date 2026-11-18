@@ -165,8 +165,39 @@ test('只有越界写入时不提解析不出目标', () => {
   assert.doesNotMatch(renderReport(manifest), /解析不出目标/);
 });
 
+// 被拒的原因归因不同，处置也不同（改 agent 命令 / 改 scenario / 改 guard），
+// 全并进「解析不出目标」会把 guard 没覆盖命令这件事藏起来。
+test('被拒原因按 reason 逐项分开写，不只分两桶', () => {
+  const manifest = {
+    ...MANIFEST,
+    calls: {
+      ...MANIFEST.calls,
+      rejected: 4,
+      outOfBounds: 1,
+      rejectedReasons: { 'out-of-bounds': 1, 'unknown-command': 2, 'id-mismatch': 1 },
+    },
+  };
+  const report = renderReport(manifest);
+  assert.match(report, /越界写入 1 次/);
+  assert.match(report, /未知命令 2 次/);
+  assert.match(report, /id 不一致 1 次/);
+  assert.doesNotMatch(report, /解析不出目标 3 次/, '两种原因不该再被并成一个数');
+});
+
 test('没有写命令被拒时不写这一行', () => {
   assert.doesNotMatch(renderReport(MANIFEST), /被拒绝的写命令/);
+});
+
+// 越界写入归因于三方（agent 用错命令 / scenario 没点名测试清单 / guard 表不完善），
+// 不是「skill 没做到」。它单列在报告里供人判断，不进 pass-fail——
+// 把它判成 failed 会让本就不该红的运行变红（ADR-0014 要消除的正是这种红）。
+test('越界写入只进报告，不改变判定结论', () => {
+  const passed = { ...MANIFEST, assertion: { status: 'passed', results: [] } };
+  const withRejects = { ...passed, calls: { ...MANIFEST.calls, rejected: 5, outOfBounds: 5 } };
+  const report = renderReport(withRejects);
+  assert.match(report, /越界写入 5 次/, '事实要写进报告');
+  assert.match(report, /结局断言 通过/, '判定结论不因越界拒绝而改变');
+  assert.doesNotMatch(report, /过程断言 未通过/);
 });
 
 test('摘要给人读：一段话说完这次测了什么、跑了多少、建了什么', () => {
