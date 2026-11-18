@@ -269,6 +269,18 @@ export async function runOneSession({ argv, sandbox, callLogPath, createdFile, t
   return runSession({ argv, cwd: sandbox.workDir, env, transcriptPath });
 }
 
+// 加载一条用例的断言模块。探针不跑断言（ADR-0015）：目录里有 assert.mjs 也不加载，
+// 那是留给搬进 scenarios/ 之后的草稿——缺它更不是错误，这正是探针与 scenario 的分别。
+//
+// 过程断言是可选件：没有规则目录是正常的（结论标「过程未判」），加载失败才是用例写错了。
+// 两条断言一起在这里加载，是因为它们对编排层是同一件事——任一加载失败，这条用例就不跑。
+export async function loadScenarioAssertions(scenario) {
+  if (scenario.kind === 'probe') return { assertionFn: null, processFn: null };
+  const assertionFn = await loadAssert(scenario.dir);
+  const processFn = await loadProcessAssert(scenario.dir);
+  return { assertionFn, processFn };
+}
+
 async function runOne(options, scenario, projects, assertionFn, processFn) {
   const id = scenario.id;
   const runKey = runId();
@@ -618,26 +630,18 @@ async function main() {
     }
     let assertionFn;
     let processFn = null;
-    // 探针不跑断言（ADR-0015）：目录里有 assert.mjs 也不加载它，那是留给搬进
-    // scenarios/ 之后的草稿。缺它更不是错误——这正是探针与 scenario 的分别。
-    if (scenario.kind === 'probe') {
-      assertionFn = null;
-    } else {
-      try {
-        assertionFn = await loadAssert(scenario.dir);
-        // 过程断言是可选件（scenarios/<id>/process.mjs）：缺它是正常的，
-        // 结论里标「过程未判」；加载失败才是用例写错了。
-        processFn = await loadProcessAssert(scenario.dir);
-      } catch (error) {
-        const { runKey, runDir } = writeUnusableRun(repoRoot, id, {
-          skillPath: options.skillPath,
-          status: 'broken',
-          detail: error.message,
-        });
-        console.error(`MISCONFIGURED ${id}  断言模块加载失败：${error.message}（报告 ${path.relative(repoRoot, runDir)}，run=${runKey}）`);
-        failures += 1;
-        continue;
-      }
+    try {
+      ({ assertionFn, processFn } = await loadScenarioAssertions(scenario));
+    } catch (error) {
+      const { runKey, runDir } = writeUnusableRun(repoRoot, id, {
+        skillPath: options.skillPath,
+        status: 'broken',
+        detail: error.message,
+      });
+      console.error(`MISCONFIGURED ${id}  断言模块加载失败：${error.message}（报告 ${path.relative(repoRoot, runDir)}，run=${runKey}）`);
+      failures += 1;
+      continue;
+    }
       if (!assertionFn) {
         const assertPath = path.join(scenario.dir, 'assert.mjs');
         const { runKey, runDir } = writeUnusableRun(repoRoot, id, {
@@ -649,7 +653,6 @@ async function main() {
         failures += 1;
         continue;
       }
-    }
 
     const notice = probeAssertNotice(scenario);
     if (notice) console.log(notice);

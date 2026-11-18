@@ -9,6 +9,7 @@ import {
   credibilityOf,
   deferredCleanupLine,
   finishRun,
+  loadScenarioAssertions,
   hasCleanupProblem,
   previousRunOf,
   probeAssertNotice,
@@ -692,4 +693,58 @@ test('会话以 work/ 为 cwd，而不是整个运行目录', () => {
   const source = fs.readFileSync(path.join(import.meta.dirname, 'run.mjs'), 'utf8');
   assert.match(source, /cwd: sandbox\.workDir/, 'cwd 必须是 sandbox.workDir');
   assert.doesNotMatch(source, /cwd: sandbox\.root/, 'cwd 不该是 sandbox.root：那会让 agent 看到 shim 与配置');
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// 装配：一条用例的断言模块在这里一起加载。
+// 这段逻辑住在 main() 里时没法测——改错接线的话，单测全绿、真跑到用例才发现。
+// ─────────────────────────────────────────────────────────────────────────
+
+function writeScenario(t, { assertSource = null, rules = {} } = {}) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'scenario-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(dir, 'scenario.json'), JSON.stringify({ prompt: 'x' }));
+  if (assertSource) fs.writeFileSync(path.join(dir, 'assert.mjs'), assertSource);
+  for (const [id, source] of Object.entries(rules)) {
+    fs.mkdirSync(path.join(dir, 'process', id), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'process', id, 'rule.mjs'), source);
+  }
+  return dir;
+}
+
+test('scenario：同时加载结局断言与过程断言', async (t) => {
+  const dir = writeScenario(t, {
+    assertSource: 'export default () => [{ ok: true, name: "结局" }];\n',
+    rules: { r1: 'export default () => [{ ok: true, name: "过程" }];\n' },
+  });
+  const { assertionFn, processFn } = await loadScenarioAssertions({ kind: 'scenario', dir });
+  assert.equal(typeof assertionFn, 'function');
+  assert.equal(typeof processFn, 'function');
+  assert.deepEqual(await processFn({ calls: [] }), [{ ok: true, name: '过程', rule: 'r1' }]);
+});
+
+test('scenario 没有过程规则时 processFn 是 null，不报错', async (t) => {
+  const dir = writeScenario(t, { assertSource: 'export default () => [];\n' });
+  const { assertionFn, processFn } = await loadScenarioAssertions({ kind: 'scenario', dir });
+  assert.equal(typeof assertionFn, 'function');
+  assert.equal(processFn, null);
+});
+
+// 探针不跑断言（ADR-0015）：目录里有 assert.mjs 与 process/ 都不加载，
+// 那是留给搬进 scenarios/ 之后的草稿。
+test('探针两个断言都不加载，即使文件在场', async (t) => {
+  const dir = writeScenario(t, {
+    assertSource: 'export default () => [{ ok: false, name: "不该被调用" }];\n',
+    rules: { r1: 'export default () => [{ ok: false, name: "不该被调用" }];\n' },
+  });
+  const { assertionFn, processFn } = await loadScenarioAssertions({ kind: 'probe', dir });
+  assert.equal(assertionFn, null);
+  assert.equal(processFn, null);
+});
+
+// 过程规则写坏了要抛出去，让编排层判 MISCONFIGURED——静默跳过会让这条规则形同虚设。
+test('规则目录缺 rule.mjs 时抛错，交给编排层判配置错误', async (t) => {
+  const dir = writeScenario(t, { assertSource: 'export default () => [];\n' });
+  fs.mkdirSync(path.join(dir, 'process', 'empty'), { recursive: true });
+  await assert.rejects(() => loadScenarioAssertions({ kind: 'scenario', dir }), /rule\.mjs/);
 });
