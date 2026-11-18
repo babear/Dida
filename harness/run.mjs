@@ -9,9 +9,9 @@ import { parseCmdShim } from './lib/shim.mjs';
 import { buildSessionArgv, runSession, parseTranscript, sanitizeEnv, sessionCompleted, summarizeTranscript } from './lib/session.mjs';
 import { defaultSettingsPath, ensureRunsDir, gitState, modelInfo, runId } from './lib/provenance.mjs';
 import { listProbes, listScenarios, loadScenario } from './lib/scenario.mjs';
-import { decideAssertion, loadAssert, takeSample } from './lib/assertion.mjs';
+import { decideAssertion, loadAssert, loadProcessAssert, takeSample } from './lib/assertion.mjs';
 import { buildState } from './lib/state.mjs';
-import { crossCheck, crossCheckStatus, outOfBoundsCalls, parseCallLog, rejectedCalls } from './lib/calllog.mjs';
+import { countRejectedReasons, crossCheck, crossCheckStatus, outOfBoundsCalls, parseCallLog, rejectedCalls } from './lib/calllog.mjs';
 import { readCreated } from './lib/created.mjs';
 import { cleanRun } from './lib/cleanup.mjs';
 import { runPreset } from './lib/preset.mjs';
@@ -230,12 +230,21 @@ export function verdictLines(assertion) {
   if (assertion.status === 'incomplete') lines.push(`    会话没正常结束，判定链未开始：${INCOMPLETE_FACT}。`);
   // invalid 的失败项指向 harness 自己（快照取不到 / 调用日志对不上 / 轨迹读不出），
   // 不是断言不通过——措辞要分开，否则控制台会把基础设施故障或防护缺陷读成 skill 缺陷。
-  for (const result of assertion.results.filter((r) => !r.ok)) {
-    const label = assertion.status === 'invalid' ? invalidLabel(assertion.cause) : '断言未通过';
+  // 结局断言与过程断言（第三面）都判 failed，也各有各的说法：
+  // 前者是「没做到」，后者是「做到了但绕了远路」（ADR-0005）。
+  // 过程断言的结果在 process.results 里，results 只放结局断言那几条。
+  const failed = assertion.surface === 'process'
+    ? (assertion.process?.results ?? []).filter((r) => !r.ok)
+    : assertion.results.filter((r) => !r.ok);
+  for (const result of failed) {
+    const label = assertion.status === 'invalid'
+      ? invalidLabel(assertion.cause)
+      : (assertion.surface === 'process' ? '过程断言未通过' : '断言未通过');
     lines.push(`    ${label} ${result.name}：期望 ${formatValue(result.expected)}，实际 ${formatValue(result.actual)}`);
   }
   return lines;
 }
+
 
 // 会话进程的启动参数。cwd 取 work/ 而不是整个运行目录——shim、配置、工具面定义都在
 // 它的上一层，agent 列目录只看得到 materials/（#16）。这条装配关系是本改动的
@@ -260,7 +269,19 @@ export async function runOneSession({ argv, sandbox, callLogPath, createdFile, t
   return runSession({ argv, cwd: sandbox.workDir, env, transcriptPath });
 }
 
-async function runOne(options, scenario, projects, assertionFn) {
+// 加载一条用例的断言模块。探针不跑断言（ADR-0015）：目录里有 assert.mjs 也不加载，
+// 那是留给搬进 scenarios/ 之后的草稿——缺它更不是错误，这正是探针与 scenario 的分别。
+//
+// 过程断言是可选件：没有规则目录是正常的（结论标「过程未判」），加载失败才是用例写错了。
+// 两条断言一起在这里加载，是因为它们对编排层是同一件事——任一加载失败，这条用例就不跑。
+export async function loadScenarioAssertions(scenario) {
+  if (scenario.kind === 'probe') return { assertionFn: null, processFn: null };
+  const assertionFn = await loadAssert(scenario.dir);
+  const processFn = await loadProcessAssert(scenario.dir);
+  return { assertionFn, processFn };
+}
+
+async function runOne(options, scenario, projects, assertionFn, processFn) {
   const id = scenario.id;
   const runKey = runId();
   const runsDir = ensureRunsDir(repoRoot);
@@ -365,6 +386,7 @@ async function runOne(options, scenario, projects, assertionFn) {
     : await decideAssertion({
       sample,
       assertionFn,
+      processFn,
       input: { created, calls, session: sessionInfo },
     });
   // 取到的事实以判定链实际取到的那份为准：断言读到的和报告写下的必须是同一份。
@@ -402,6 +424,9 @@ async function runOne(options, scenario, projects, assertionFn) {
       unparseable: calls.filter((c) => c.unparseable).length,
       rejected: rejectedCalls(calls).length,
       outOfBounds: outOfBoundsCalls(calls).length,
+      // 按 reason 分开计数：四类归因不同（改 agent 命令 / 改 scenario / 改 guard），
+      // 合成两桶会把「guard 没覆盖这条命令」藏起来（ADR-0005 2026-11-18 补充）。
+      rejectedReasons: countRejectedReasons(calls),
       crossCheck: credibility,
     },
     created,
@@ -604,23 +629,19 @@ async function main() {
       continue;
     }
     let assertionFn;
-    // 探针不跑断言（ADR-0015）：目录里有 assert.mjs 也不加载它，那是留给搬进
-    // scenarios/ 之后的草稿。缺它更不是错误——这正是探针与 scenario 的分别。
-    if (scenario.kind === 'probe') {
-      assertionFn = null;
-    } else {
-      try {
-        assertionFn = await loadAssert(scenario.dir);
-      } catch (error) {
-        const { runKey, runDir } = writeUnusableRun(repoRoot, id, {
-          skillPath: options.skillPath,
-          status: 'broken',
-          detail: error.message,
-        });
-        console.error(`MISCONFIGURED ${id}  断言模块加载失败：${error.message}（报告 ${path.relative(repoRoot, runDir)}，run=${runKey}）`);
-        failures += 1;
-        continue;
-      }
+    let processFn = null;
+    try {
+      ({ assertionFn, processFn } = await loadScenarioAssertions(scenario));
+    } catch (error) {
+      const { runKey, runDir } = writeUnusableRun(repoRoot, id, {
+        skillPath: options.skillPath,
+        status: 'broken',
+        detail: error.message,
+      });
+      console.error(`MISCONFIGURED ${id}  断言模块加载失败：${error.message}（报告 ${path.relative(repoRoot, runDir)}，run=${runKey}）`);
+      failures += 1;
+      continue;
+    }
       if (!assertionFn) {
         const assertPath = path.join(scenario.dir, 'assert.mjs');
         const { runKey, runDir } = writeUnusableRun(repoRoot, id, {
@@ -632,7 +653,6 @@ async function main() {
         failures += 1;
         continue;
       }
-    }
 
     const notice = probeAssertNotice(scenario);
     if (notice) console.log(notice);
@@ -655,7 +675,7 @@ async function main() {
       }
     }
 
-    const { run, runDir, sandbox, manifest, session, createdFile } = await runOne(options, scenario, projects, assertionFn);
+    const { run, runDir, sandbox, manifest, session, createdFile } = await runOne(options, scenario, projects, assertionFn, processFn);
     const completed = sessionCompleted(session);
 
     // 预设失败：不开会话、不清场。账本与报告已由 runOne 落盘，--clean 能收尾。
@@ -745,9 +765,11 @@ async function main() {
   // 批跑汇总（ADR-0014）：失败即留现场，跑十条挂六条就是六批任务。
   // 没有这份清单，人下次打开客户端无从追溯该收哪几条。
   for (const line of retainedSummaryLines(retainedRuns)) console.log(line);
-  // 探针不参与全量运行，但残留在 probes/ 里说明流程没走完（ADR-0015）。
-  // 只在全量运行时提醒：单跑一条探针时它本来就该待在那儿。
-  if (!options.scenario) for (const line of probesLeftoverLines(listProbes(repoRoot))) console.log(line);
+  // 流程提醒只在全量运行时给：单跑一条用例时，probes/ 里待着的探针本来就该在，
+  // 别的用例的来源状态也不该在这次运行的输出里插话。两条提醒同一个门控。
+  if (!options.scenario) {
+    for (const line of probesLeftoverLines(listProbes(repoRoot))) console.log(line);
+  }
   if (failures > 0) process.exitCode = 1;
 }
 

@@ -166,9 +166,23 @@ export function renderVerdict({ assertion, kind, run }) {
     return lines.join('\n');
   }
   if (assertion?.status === 'broken') {
-    // 用例自己的问题：断言模块坏了、没给出结果数组。修用例，不用改 skill。
+    // broken 有两个来源，修的地方相反：断言模块坏掉是改用例，过程规则坏掉是改 harness。
+    // 同一句「断言没给出结果」会把修 harness 的人引去改 assert.mjs。
     // 探针不会走到这里（它不跑断言），但旧 manifest 或接错线时仍要能渲染。
-    return detailBlock('用例配置错误：断言没给出结果', assertion.detail ?? '断言模块没能给出结果数组。', assertion.results, heading);
+    if (assertion.surface === 'process') {
+      return detailBlock(
+        'harness 缺陷：过程断言规则没给出结果',
+        assertion.detail ?? '过程断言规则抛了异常或返回了非法形状。',
+        assertion.results,
+        heading,
+      );
+    }
+    return detailBlock(
+      '用例配置错误：断言没给出结果',
+      `${assertion.detail ?? '断言模块没能给出结果数组。'}\n\n去改 \`scenarios/<id>/assert.mjs\`，不是改 skill。`,
+      assertion.results,
+      heading,
+    );
   }
   // 探针的成功词是 sampled（ADR-0015）：它只证明样本取到了，不证明 skill 对。
   // 放在 incomplete / invalid 之前，因为它的分支措辞与后面的判定口径完全不同。
@@ -190,9 +204,12 @@ export function renderVerdict({ assertion, kind, run }) {
     return detailBlock(invalidTitle(assertion.cause), assertion.detail ?? '', assertion.results, heading);
   }
   if (assertion?.status === 'failed') {
-    // 与 invalid 的 cause=state 分开：那条指向重跑，这条指向改 skill。
-    // 两者都写着「这次没通过」，指引却相反，措辞混用会把人带错方向。
-    lines.push('**结局断言 未通过：skill 没做到**', '', renderAssertions(assertion.results ?? []));
+    // 第三面（ADR-0005）与第二面都判 failed，含义相反：结局失败是「没做到」，
+    // 过程失败是「做到了，但绕了远路」。两句话分开写，指引才不会指错。
+    // 过程断言的失败项在 process.results 里，results 只放结局断言那几条。
+    const process = assertion.surface === 'process';
+    lines.push(process ? '**过程断言 未通过：做到了，但绕了远路**' : '**结局断言 未通过：skill 没做到**');
+    lines.push('', renderAssertions(process ? (assertion.process?.results ?? []) : (assertion.results ?? [])));
     lines.push('', '去改 skill。同样的 skill 再跑一次不会变绿。');
     return lines.join('\n');
   }
@@ -200,10 +217,43 @@ export function renderVerdict({ assertion, kind, run }) {
   // 落到这里写「通过」等于给一次没评过的运行发绿灯。
   if (assertion?.status === 'passed') {
     lines.push('结局断言 通过');
+    // 过程那一面有三种状态，不能混：没写 process.mjs（未判）/ 跑了全过（通过）/
+    // 旧 manifest 没有这个字段（不写）。「未判」写成「通过」是把没做的事说成做了。
+    if (assertion.process?.evaluated === true) {
+      const count = assertion.process.results?.length ?? 0;
+      lines.push(`过程断言 通过（${count} 条）`);
+    } else if (assertion.process?.evaluated === false) {
+      lines.push('过程断言 未判（这条用例没有 `process.mjs`）');
+    }
     return lines.join('\n');
   }
   lines.push('未评断言（这份 manifest 没有断言结果，可能是旧版本运行）');
   return lines.join('\n');
+}
+
+// 被拒写命令的原因要分开说：四类归因不同，处置也不同（改 agent 命令 / 改 scenario / 改 guard）。
+// 合成「越界」与「其它」两桶会把 guard 没覆盖哪条命令这件事藏起来。
+// 旧 manifest 没有 rejectedReasons，退回按两个总数渲染。
+const REJECT_LABELS = {
+  'out-of-bounds': '越界写入',
+  'unknown-command': '未知命令',
+  'id-mismatch': 'id 不一致',
+  'no-target': '解析不出目标',
+};
+
+export function rejectedSummary(calls) {
+  const reasons = calls?.rejectedReasons;
+  if (reasons) {
+    return Object.entries(reasons)
+      .filter(([, count]) => count > 0)
+      .map(([reason, count]) => `${REJECT_LABELS[reason] ?? reason} ${count} 次`);
+  }
+  const outOfBounds = calls?.outOfBounds ?? 0;
+  const other = (calls?.rejected ?? 0) - outOfBounds;
+  return [
+    outOfBounds && `越界写入 ${outOfBounds} 次`,
+    other > 0 && `解析不出目标 ${other} 次`,
+  ].filter(Boolean);
 }
 
 export function renderReport(manifest) {
@@ -281,12 +331,7 @@ export function renderReport(manifest) {
     lines.push(`- 轨迹 ${manifest.transcript.path}（${manifest.transcript.events ?? 0} 条事件，${manifest.transcript.toolCalls ?? 0} 次工具调用）`);
   }
   if (manifest.calls?.rejected) {
-    const outOfBounds = manifest.calls.outOfBounds ?? 0;
-    const other = manifest.calls.rejected - outOfBounds;
-    const parts = [];
-    if (outOfBounds) parts.push(`越界写入 ${outOfBounds} 次`);
-    if (other) parts.push(`解析不出目标 ${other} 次`);
-    lines.push(`- 被拒绝的写命令 ${manifest.calls.rejected} 次（${parts.join('、')}；写请求没有发出去）`);
+    lines.push(`- 被拒绝的写命令 ${manifest.calls.rejected} 次（${rejectedSummary(manifest.calls).join('、')}；写请求没有发出去）`);
   }
   const cross = manifest.calls?.crossCheck;
   // 会话没正常结束时判定链没开始，可信度检查没跑过（ADR-0014）：这时候把
@@ -341,12 +386,7 @@ export function renderSummary(manifest) {
     if (cleanup.remaining?.length) parts.push(`有 ${cleanup.remaining.length} 条删完仍在清单里。`);
   }
   if (manifest.calls?.rejected) {
-    const outOfBounds = manifest.calls.outOfBounds ?? 0;
-    const other = manifest.calls.rejected - outOfBounds;
-    const detail = [outOfBounds && `${outOfBounds} 次越界写入`, other && `${other} 次解析不出目标`]
-      .filter(Boolean)
-      .join('、');
-    parts.push(`另有 ${manifest.calls.rejected} 次写命令被当场拒绝（${detail}）。`);
+    parts.push(`另有 ${manifest.calls.rejected} 次写命令被当场拒绝（${rejectedSummary(manifest.calls).join('、')}）。`);
   }
   return parts.join('');
 }

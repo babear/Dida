@@ -9,6 +9,7 @@ import {
   credibilityOf,
   deferredCleanupLine,
   finishRun,
+  loadScenarioAssertions,
   hasCleanupProblem,
   previousRunOf,
   probeAssertNotice,
@@ -284,7 +285,35 @@ test('结局断言失败时控制台照旧打「断言未通过」', () => {
   }).join('\n');
   assert.match(text, /断言未通过 父任务应为 TEXT/);
   assert.match(text, /期望 TEXT/);
+  assert.doesNotMatch(text, /过程断言/, '结局面的失败不说成过程面的');
 });
+
+// 过程断言与结局断言都判 failed，控制台的标签必须分开：一个说「没做到」，
+// 一个说「做到了但绕了远路」，指引指向 skill 的不同位置。
+test('过程断言失败时控制台说「过程断言未通过」，不说成结局断言', () => {
+  const text = verdictLines({
+    status: 'failed',
+    surface: 'process',
+    process: {
+      evaluated: true,
+      results: [{ ok: false, name: '不存在建带 --items 的任务后删除重建', expected: '没有出现', actual: '第 3、5、7 条' }],
+    },
+    // 结局断言这一面是通过的：它的项不该让控制台多打一行，也不该被当成过程那面
+    results: [{ ok: true, name: '父任务正文非空' }],
+  }).join('\n');
+  assert.match(text, /过程断言未通过 不存在建带 --items 的任务后删除重建/);
+  assert.doesNotMatch(text, /结局断言/);
+  assert.equal(text.split('\n').length, 1, '只打过程那一条失败项，不把通过项也刷出来');
+});
+
+test('两面都通过时控制台不打印任何失败行', () => {
+  assert.deepEqual(verdictLines({
+    status: 'passed',
+    process: { evaluated: false, results: [] },
+    results: [{ ok: true, name: '父任务正文非空' }],
+  }), []);
+});
+
 
 // 清场门控（ADR-0014）：只有 PASSED 才清场。这张表是判定结果与清场动作的唯一映射，
 // 逐状态钉住——旧门控是「会话没正常结束才不清场」，断言失败照清，
@@ -664,4 +693,58 @@ test('会话以 work/ 为 cwd，而不是整个运行目录', () => {
   const source = fs.readFileSync(path.join(import.meta.dirname, 'run.mjs'), 'utf8');
   assert.match(source, /cwd: sandbox\.workDir/, 'cwd 必须是 sandbox.workDir');
   assert.doesNotMatch(source, /cwd: sandbox\.root/, 'cwd 不该是 sandbox.root：那会让 agent 看到 shim 与配置');
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// 装配：一条用例的断言模块在这里一起加载。
+// 这段逻辑住在 main() 里时没法测——改错接线的话，单测全绿、真跑到用例才发现。
+// ─────────────────────────────────────────────────────────────────────────
+
+function writeScenario(t, { assertSource = null, rules = {} } = {}) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'scenario-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(dir, 'scenario.json'), JSON.stringify({ prompt: 'x' }));
+  if (assertSource) fs.writeFileSync(path.join(dir, 'assert.mjs'), assertSource);
+  for (const [id, source] of Object.entries(rules)) {
+    fs.mkdirSync(path.join(dir, 'process', id), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'process', id, 'rule.mjs'), source);
+  }
+  return dir;
+}
+
+test('scenario：同时加载结局断言与过程断言', async (t) => {
+  const dir = writeScenario(t, {
+    assertSource: 'export default () => [{ ok: true, name: "结局" }];\n',
+    rules: { r1: 'export default () => [{ ok: true, name: "过程" }];\n' },
+  });
+  const { assertionFn, processFn } = await loadScenarioAssertions({ kind: 'scenario', dir });
+  assert.equal(typeof assertionFn, 'function');
+  assert.equal(typeof processFn, 'function');
+  assert.deepEqual(await processFn({ calls: [] }), [{ ok: true, name: '过程', rule: 'r1' }]);
+});
+
+test('scenario 没有过程规则时 processFn 是 null，不报错', async (t) => {
+  const dir = writeScenario(t, { assertSource: 'export default () => [];\n' });
+  const { assertionFn, processFn } = await loadScenarioAssertions({ kind: 'scenario', dir });
+  assert.equal(typeof assertionFn, 'function');
+  assert.equal(processFn, null);
+});
+
+// 探针不跑断言（ADR-0015）：目录里有 assert.mjs 与 process/ 都不加载，
+// 那是留给搬进 scenarios/ 之后的草稿。
+test('探针两个断言都不加载，即使文件在场', async (t) => {
+  const dir = writeScenario(t, {
+    assertSource: 'export default () => [{ ok: false, name: "不该被调用" }];\n',
+    rules: { r1: 'export default () => [{ ok: false, name: "不该被调用" }];\n' },
+  });
+  const { assertionFn, processFn } = await loadScenarioAssertions({ kind: 'probe', dir });
+  assert.equal(assertionFn, null);
+  assert.equal(processFn, null);
+});
+
+// 过程规则写坏了要抛出去，让编排层判 MISCONFIGURED——静默跳过会让这条规则形同虚设。
+test('规则目录缺 rule.mjs 时抛错，交给编排层判配置错误', async (t) => {
+  const dir = writeScenario(t, { assertSource: 'export default () => [];\n' });
+  fs.mkdirSync(path.join(dir, 'process', 'empty'), { recursive: true });
+  await assert.rejects(() => loadScenarioAssertions({ kind: 'scenario', dir }), /rule\.mjs/);
 });

@@ -20,6 +20,14 @@ npm run test:harness  # harness 自己的单元测试，不烧 API
 | `--hold` | 关 | 跑完不清场，留现场给人看；之后用 `--clean <runId>` 收尾 |
 | `--clean <runId>` | — | 只按该 run 的 `created.ndjson` 删除任务，然后退出。**不改写 `report.md`，也不覆盖 `manifest.cleanup`**——那份报告与当时的结论是那次运行的产物，收尾只把结果记到 `manifest.cleanupAfter` |
 
+回放历史运行（不烧 API，只读）：
+
+```bash
+node harness/replay.mjs --scenario <id> --run <runId>
+```
+
+它读 `runs/<runId>/calls.ndjson` 与 `state.json`，跑这条用例的 `assert.mjs` 与 `process/*/rule.mjs`，打印逐条结果。用来验证断言模块在**真实日志**上的结论——写断言时应当看到「结局断言全绿、过程断言变红」。不动 manifest、不清场。
+
 退出码：任一 scenario 断言未通过、会话非零退出或超时、用例配置错误（缺 `assert.mjs`，或断言模块加载失败、没给出合法结果）、预设失败（越界、指向已有任务、空操作、执行失败）、可信度检查不过（有 dida 调用没进日志，或轨迹读不出可比的调用）、终态快照取不到、清场中止或删除失败，都是 1。
 
 ### 清场纪律
@@ -53,6 +61,7 @@ npm run test:harness  # harness 自己的单元测试，不烧 API
 | `materials/` | 可选，整体复制进运行目录的 `work/materials/` | 是 | 已有 |
 | `preset.mjs` | 可选，声明要建的任务，会话前由 harness 用真 CLI 执行 | 否 | 已有 |
 | `assert.mjs` | 结局断言，默认导出 `{tasks, created, calls, session} => 结果数组` | 否 | 已有 |
+| `process/<rule-id>/` | 可选，每条过程规则一个目录（`rule.mjs` + `RULE.md` + `evidence.ndjson`）；缺省则不判过程这一面 | 否 | 已有 |
 
 加一条 scenario 就是加一个目录，harness 一行不用改（前提是 `assert.mjs` 与 `preset.mjs` 已实现）。目录形态与三面判定的完整理由见 ADR-0012。
 
@@ -102,9 +111,11 @@ npm run test:harness  # harness 自己的单元测试，不烧 API
 
 1. **可信度检查**：从轨迹里每次 `PowerShell` 调用的命令字符串中抽出 dida 调用，与调用日志的 argv 逐条对；对不上的那几次就是没走过 shim。与 dida 无关的命令（`Get-ChildItem`、`New-Item` 等）不参与判断；轨迹读不出事件、或命令里出现 dida 却解析不出（如 `$cmd = "dida"; & $cmd task create`）则判无从比对。三态：`consistent` / `inconsistent` / `indeterminate`，后两种都标 `invalid` 而非 `fail`——退出码同样非零，但语义是"结果不可用"，不是 skill 有缺陷。**不过即终止，不取快照、不跑断言。**
 2. **取快照 ＋ 结局断言**：读终态快照 `runs/<runId>/state.json`——账本里每个 id 取回的任务现状，取不到的记 `null`。定位与清场同一套：先按测试清单枚举再按 id 找，因为 agent 可能用 `task move` 挪走任务；枚举不到才回退到账本记的 `projectId` 直查。快照在断言这一刻取，不在会话结束时取。
-3. **过程断言**：调用日志 argv 序列上的三条硬规则，见 ADR-0005。第 3 条（越界写入）现由 shim 当场拒绝并记 `rejected`，只需接进判定。
+3. **过程断言**：判定链的第三面，写在 `scenarios/<id>/process/<rule-id>/` 下，**一条规则一个目录**：`rule.mjs` 是判据（默认导出 `{ calls } => 结果数组`）、`RULE.md` 是问题说明、`evidence.ndjson` 是依据的那次真实调用序列。规则按用例各写一份、不设全局表。**缺省允许**——没有规则目录的用例不判过程这一面，报告写「过程断言 未判」，不写「通过」。写规则前先看真实会话的调用记录（ADR-0005 的 2026-11-18 补充）。
 
-**顺序**：会话是否正常结束 → 可信度检查 → 取快照 ＋ 结局断言 → 过程断言。除 `PASSED` 外退出码都是 1。
+**越界写入不进判定。** shim 当场拒绝并把 `decision: 'rejected'` / `reason: 'out-of-bounds'` 写进调用日志，报告按原因单列次数——但它是**被拦住的尝试**，归因可能是 agent 用错命令、scenario 原话没点名测试清单、或 guard 表没覆盖这条命令，不是「skill 没做到」。判成 `FAILED` 会把这三类不该红的运行变红，所以它只进报告供人判断。
+
+**顺序**：会话是否正常结束 → 可信度检查 → 取快照 ＋ 结局断言 → 过程断言。除 `PASSED` 外退出码都是 1。结局断言不过即终止，过程断言不跑——没做到的话，谈有没有绕远路没有意义。
 
 | 结果 | 含义 | 怎么修 |
 |---|---|---|
@@ -117,7 +128,7 @@ npm run test:harness  # harness 自己的单元测试，不烧 API
 | `PRESET FAILED` | `preset.mjs` 越界、指向已有任务、空操作或执行失败：不建运行目录、不开会话、不清场 | 改 `preset.mjs`；已建的任务用 `--clean <runId>` 收尾 |
 | `NOT FOUND` | `--scenario` 写错 id | 改正 id |
 
-过程断言归 #8。可信度判据已于 #18 从「比条数」改为逐调用比对：轨迹里的 dida 调用与调用日志逐条对，与 dida 无关的 PowerShell 命令不参与判断。
+过程断言已于 #8 接入判定链，按 scenario 写在 `process/<rule-id>/` 里（见上「判定」小节）。可信度判据已于 #18 从「比条数」改为逐调用比对：轨迹里的 dida 调用与调用日志逐条对，与 dida 无关的 PowerShell 命令不参与判断。
 
 ## 运行目录
 

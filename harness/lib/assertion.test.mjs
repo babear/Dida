@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { decideAssertion, loadAssert, runAssert, takeSample } from './assertion.mjs';
+import { decideAssertion, loadAssert, loadProcessAssert, runAssert, takeSample } from './assertion.mjs';
 
 function tmpDir(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'assert-test-'));
@@ -51,6 +51,67 @@ test('用例目录里有 assert.mjs 时加载它的默认导出', async (t) => {
 test('缺 assert.mjs 时返回 null——调用方据此判「缺断言」而不是开跑', async (t) => {
   assert.equal(await loadAssert(tmpDir(t)), null);
 });
+
+// 过程断言的可选件：有就加载，没有就是 null（允许缺省），不是错误。
+// 过程断言按**一条规则一个目录**组织（scenarios/<id>/process/<rule-id>/）：
+// RULE.md 写问题说明，rule.mjs 是判据，evidence.ndjson 是那次运行的原始调用序列。
+// 一条用例可以有多条规则，互不干扰；加一条就是加一个目录，harness 不改。
+function writeRule(t, scenarioDir, id, source) {
+  const dir = path.join(scenarioDir, 'process', id);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'rule.mjs'), source);
+  return dir;
+}
+
+const GREEN_RULE = 'export default () => [{ ok: true, name: "绿" }];';
+
+test('没有 process/ 目录时返回 null——缺省允许', async (t) => {
+  assert.equal(await loadProcessAssert(tmpDir(t)), null);
+});
+
+test('process/ 是空目录时也返回 null——没有规则就不判过程这一面', async (t) => {
+  const dir = tmpDir(t);
+  fs.mkdirSync(path.join(dir, 'process'));
+  assert.equal(await loadProcessAssert(dir), null);
+});
+
+test('一条规则：加载出来是一个能跑的求值函数', async (t) => {
+  const scenarioDir = tmpDir(t);
+  writeRule(t, scenarioDir, 'no-something', 'export default ({ calls }) => [{ ok: calls.length === 0, name: "没有调用" }];');
+  const fn = await loadProcessAssert(scenarioDir);
+  assert.equal(typeof fn, 'function');
+  assert.deepEqual(await fn({ calls: [] }), [{ ok: true, name: '没有调用', rule: 'no-something' }]);
+});
+
+// 多条规则各自独立跑，结果合并；每条带规则 id，报告才能点名是哪条。
+test('多条规则：结果合并，逐条标明来自哪条规则', async (t) => {
+  const scenarioDir = tmpDir(t);
+  writeRule(t, scenarioDir, 'always-red', 'export default () => [{ ok: false, name: "红" }];');
+  writeRule(t, scenarioDir, 'always-green', 'export default () => [{ ok: true, name: "绿" }];');
+  const results = await (await loadProcessAssert(scenarioDir))({ calls: [] });
+  assert.equal(results.length, 2);
+  assert.deepEqual(results.map((r) => r.rule).sort(), ['always-green', 'always-red']);
+});
+
+test('规则目录缺 rule.mjs 时报错——目录建了却没写判据', async (t) => {
+  const scenarioDir = tmpDir(t);
+  fs.mkdirSync(path.join(scenarioDir, 'process', 'empty-rule'), { recursive: true });
+  await assert.rejects(() => loadProcessAssert(scenarioDir), /rule.mjs/);
+});
+
+test('rule.mjs 没有默认导出时抛错——那是用例写错了', async (t) => {
+  const scenarioDir = tmpDir(t);
+  writeRule(t, scenarioDir, 'bad', 'export const notDefault = 1;');
+  await assert.rejects(() => loadProcessAssert(scenarioDir), /没有默认导出的函数/);
+});
+
+test('规则 id 取自目录名，不取自文件内容', async (t) => {
+  const scenarioDir = tmpDir(t);
+  writeRule(t, scenarioDir, 'my-rule-id', GREEN_RULE);
+  const results = await (await loadProcessAssert(scenarioDir))({ calls: [] });
+  assert.equal(results[0].rule, 'my-rule-id');
+});
+
 
 test('断言函数原样收到 tasks / created / calls / session', async (t) => {
   const dir = writeAssert(
@@ -324,6 +385,126 @@ test('返回值里带着这次判定用的快照，供调用方落 manifest', as
 // 旧签名（completed / crossCheck / takeSnapshot）已作废：两处各判一次会让
 // 「共享段说没取、断言那一面说取了」的分叉重新出现。接错线要立刻炸，
 // 而不是静默返回一个没结论的对象滑进报告。
+// ─────────────────────────────────────────────────────────────────────────
+// 过程断言：判定链第三面（ADR-0005 / ADR-0014）。只有结局断言通过才判——
+// 没做到的话，谈有没有绕远路没有意义。
+//
+// 过程断言按 scenario 写（scenarios/<id>/process.mjs），与 assert.mjs 对称：
+// 收一份只含调用日志的入参，返回同形的结果数组。没写就是不判过程——允许缺省。
+// ─────────────────────────────────────────────────────────────────────────
+
+// 过程断言的替身：记下它实际收到了什么，顺带钉住「只看调用日志」。
+function processFn(result) {
+  let seen;
+  const fn = (input) => {
+    seen = input;
+    return result;
+  };
+  fn.seen = () => seen;
+  return fn;
+}
+
+test('结局断言不通过时不跑过程断言——没做到，不谈绕没绕远路', async () => {
+  let called = 0;
+  const out = await decideAssertion({
+    sample: sampled(),
+    assertionFn: () => [{ ok: false, name: '父任务应为 TEXT', expected: 'TEXT', actual: 'CHECKLIST' }],
+    input: INPUT,
+    processFn: () => { called += 1; return []; },
+  });
+  assert.equal(out.status, 'failed');
+  assert.equal(out.surface, undefined, '结局断言失败时不该标成过程面');
+  assert.equal(called, 0);
+});
+
+test('结局断言坏掉（broken）时同样不跑过程断言', async () => {
+  let called = 0;
+  const out = await decideAssertion({
+    sample: sampled(),
+    assertionFn: () => { throw new Error('崩了'); },
+    input: INPUT,
+    processFn: () => { called += 1; return []; },
+  });
+  assert.equal(out.status, 'broken');
+  assert.equal(called, 0);
+});
+
+// 缺省允许：没有 process.mjs 的用例只判结局，过程那一面标成「未判」而不是「通过」。
+test('没写过程断言时判 passed，但标明过程未判', async () => {
+  const out = await decideAssertion({
+    sample: sampled(),
+    assertionFn: () => [{ ok: true }],
+    input: INPUT,
+  });
+  assert.equal(out.status, 'passed');
+  assert.deepEqual(out.process, { evaluated: false, results: [] }, '未判不能冒充通过');
+});
+
+test('结局断言通过后跑过程断言，全过 → passed，过程结果分开存在 process 里', async () => {
+  const out = await decideAssertion({
+    sample: sampled(),
+    assertionFn: () => [{ ok: true, name: '父任务正文非空', expected: '非空', actual: '非空' }],
+    input: INPUT,
+    processFn: processFn([{ ok: true, name: '不存在删除后再建', expected: '没有出现', actual: '没有出现' }]),
+  });
+  assert.equal(out.status, 'passed');
+  assert.equal(out.process.evaluated, true);
+  assert.equal(out.process.results.length, 1, '过程断言的结果留在 process 里');
+  assert.equal(out.results.length, 1, 'results 只放结局断言那几条：两面分开，报告才说得清是哪一面');
+});
+
+test('过程断言不通过 → failed，且标成过程面，与结局断言失败区分开', async () => {
+  const out = await decideAssertion({
+    sample: sampled(),
+    assertionFn: () => [{ ok: true, name: '父任务正文非空', expected: '非空', actual: '非空' }],
+    input: INPUT,
+    processFn: processFn([
+      { ok: false, name: '不存在建带 --items 的任务后删除重建', expected: '没有出现', actual: '第 3 条建、第 5 条删、第 7 条重建' },
+    ]),
+  });
+  assert.equal(out.status, 'failed');
+  assert.equal(out.surface, 'process');
+});
+
+test('过程断言只收到调用日志，收不到快照与轨迹', async () => {
+  const fn = processFn([]);
+  const calls = [{ argv: ['task', 'get'] }];
+  await decideAssertion({
+    sample: sampled(),
+    assertionFn: () => [{ ok: true }],
+    input: { ...INPUT, calls, session: { exitCode: 0 }, created: [{ id: 'z' }] },
+    processFn: fn,
+  });
+  assert.deepEqual(fn.seen(), { calls }, '只给调用日志：轨迹归可信度检查，快照归结局断言');
+});
+
+test('过程断言抛异常 → broken，指向 harness 而不是 skill', async () => {
+  const out = await decideAssertion({
+    sample: sampled(),
+    assertionFn: () => [{ ok: true }],
+    input: INPUT,
+    processFn: () => { throw new Error('过程断言写坏了'); },
+  });
+  assert.equal(out.status, 'broken');
+  assert.equal(out.surface, 'process', '报告要靠它区分改用例还是改 harness');
+  assert.match(out.detail, /过程断言/);
+});
+
+// 过程断言是 scenario 自己的代码：它返回非法形状说明用例写错了，
+// 与 assert.mjs 同一个出口——判 broken，不判 failed。
+test('过程断言返回非法结果时判 broken，不静默当成通过', async () => {
+  for (const bad of [undefined, {}, [{ name: 'x' }], [{ ok: 'yes' }]]) {
+    const out = await decideAssertion({
+      sample: sampled(),
+      assertionFn: () => [{ ok: true }],
+      input: INPUT,
+      processFn: () => bad,
+    });
+    assert.equal(out.status, 'broken', `返回 ${JSON.stringify(bad)} 时不该当成通过`);
+    assert.equal(out.surface, 'process');
+  }
+});
+
 test('只传旧字段、不传 sample 时立刻报错', async () => {
   let called = 0;
   let taken = 0;

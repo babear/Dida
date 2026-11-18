@@ -46,6 +46,8 @@ export function loadScenario(repoRoot, id) {
     kind: found.kind,
     // 探针目录里的 assert.mjs 不执行，但调用方要能据此提示「未被使用」。
     hasAssert: fs.existsSync(path.join(found.dir, 'assert.mjs')),
+    // 过程断言是可选件：没写就是不判过程这一面，报告里写明「未判」。
+    hasProcessAssert: fs.existsSync(path.join(found.dir, 'process.mjs')),
     // 预设可选：没有它时行为不变，编排层按 null 走原路（#19）。
     hasPreset: fs.existsSync(path.join(found.dir, 'preset.mjs')),
     prompt: manifest.prompt,

@@ -56,3 +56,14 @@ export function rejectedCalls(calls) {
 export function outOfBoundsCalls(calls) {
   return rejectedCalls(calls).filter((call) => call.reason === 'out-of-bounds');
 }
+
+// 被拒的原因按条数汇总。四类归因不同、处置也不同，报告逐项写才指得准。
+// 没有 reason 的旧日志与未知 reason 都归到 'unknown'——不静默丢掉，否则总数对不上。
+export function countRejectedReasons(calls) {
+  const counts = {};
+  for (const call of rejectedCalls(calls)) {
+    const reason = call.reason ?? 'unknown';
+    counts[reason] = (counts[reason] ?? 0) + 1;
+  }
+  return counts;
+}
