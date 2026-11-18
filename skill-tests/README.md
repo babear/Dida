@@ -2,7 +2,7 @@
 
 被测 skill 的测试用例数据。机器在 `harness/`，这里只有数据。
 
-> **这份文档里 `assert.mjs`、`process.mjs`、`preset.mjs` 与 `state.json` 都已实现。** 缺 `assert.mjs` 的用例会被判「用例配置错误」并直接退出、不开会话；`process.mjs` 是可选的，不写就是不判过程这一面；`preset.mjs` 写错（越界、指向已有任务、空操作、执行失败）同样拒绝该 run、不进入会话。探针的设计见 ADR-0015。
+> **这份文档里 `assert.mjs`、`process/`、`preset.mjs` 与 `state.json` 都已实现。** 缺 `assert.mjs` 的用例会被判「用例配置错误」并直接退出、不开会话；`process/` 是可选的，没有规则就是不判过程这一面；`preset.mjs` 写错（越界、指向已有任务、空操作、执行失败）同样拒绝该 run、不进入会话。探针的设计见 ADR-0015。
 
 ```
 skill-tests/
@@ -19,7 +19,7 @@ skill-tests/
 | `materials/` | 可选。用户原话里要引用的文件，整体复制进运行目录的 `work/materials/` | 被测 agent |
 | `preset.mjs` | 可选。声明要建的任务，会话前由 harness 用真 CLI 执行 | 无 |
 | `assert.mjs` | 结局断言。默认导出 `{tasks, created, calls, session} => 结果数组` | 无 |
-| `process.mjs` | 可选。过程断言。默认导出 `{calls} => 结果数组` | 无 |
+| `process/<rule-id>/` | 可选。每条规则一个目录：`rule.mjs` 判据、`RULE.md` 问题说明、`evidence.ndjson` 依据的调用序列 | 无 |
 
 判定分三面、按**严格顺序**短路：可信度检查 → 结局断言 → 过程断言，前一面不过就不算后面；会话正常结束是前置门。见 `harness/README.md` 的「判定」与 ADR-0014。
 
@@ -112,7 +112,7 @@ export default function assert({ tasks, created, calls, session }) {
 - `created` 条目带 `origin: 'preset' | 'agent'`，要区分来源时用它。
 - `tasks` 里取不到的任务是 `null`（账本有 id 但任务被删了），断言要能处理。
 
-### 5. 据此写过程断言 `process.mjs`（可选）
+### 5. 据此写过程规则 `process/<rule-id>/`（可选）
 
 **过程断言的依据和结局断言一样，是探针的调用记录。** 顺序不能反过来：先有记录里实际出现过的错误动作，再写规则。没有记录作依据的规则，要么抓不到真问题，要么把合理路径判红。
 
@@ -138,8 +138,8 @@ export default function processAssert({ calls }) {
 - **一个动作不一定每次运行都会出现。** 这条用例的目的就是盯住它复现不复发；没出现就是绿。
 - **规则自己也要有测试**：同目录放 `process.test.mjs`，用真实记录里的调用原样当夹具，验证命中与不误报。
 - 过程断言**不是**这条用例的必写项。一条用例未必有已确认的过程缺陷；没写就是不判，报告写「过程断言 未判」。
-- **每条规则都要留证据原件。** 过程断言会随 skill 修复迭代增长，没有原件后来的人就不知道它为什么这么写。把那次运行的完整调用序列脱敏后存进 `evidence/<规则标识>-<来源运行>.ndjson`（只有 `argv` 与 `decision`，不含轨迹），注释引用它，`process.test.mjs` 直接读它当夹具。约定见 `scenarios/<id>/evidence/README.md`。
-- **一条用例可以有多条过程断言，各自带证据。** 修好一个问题之后又暴露新的，就再加一条、再存一份证据；不要改掉旧规则来凑新问题。
+- **一条规则一个目录，规则与它的证据放在一起。** `process/<rule-id>/` 里三份文件缺一不可：`RULE.md`（观察到什么、为什么是缺陷、正确做法、什么时候能删）、`rule.mjs`（判据）、`evidence.ndjson`（那次运行的完整调用序列，脱敏只留 `argv` 与 `decision`）。`rule.test.mjs` 直接读 `evidence.ndjson` 当夹具——证据与判据同源，不会各自漂移。
+- **多条规则就多个目录。** 修好一个问题之后又暴露新的，就再加一个 `process/<新规则>/`，不要改掉旧规则来凑新问题。目录名就是规则 id，报告按它点名。
 - **被测 agent 的行为本来就不稳定，这不是不写规则的理由。** skill 的职责就是把不稳定的判断收敛到稳定正确的做法；过程断言守的是「收敛之后它不再复发」。规则抓的是**已确认真实发生过**的错误动作，哪怕它只出现过一次——那一次就是证据。判断标准是「这个动作在正确做法下是否绝不该出现」，不是「它每次都会出现」。
 
 ### 6. 用回放验证断言（不烧 API）
@@ -150,7 +150,7 @@ export default function processAssert({ calls }) {
 node harness/replay.mjs --scenario <id> --run <runId>
 ```
 
-它只读 `runs/<runId>/calls.ndjson` 与 `state.json`，跑这条用例的 `assert.mjs` 与 `process.mjs`，打印逐条结果。
+它只读 `runs/<runId>/calls.ndjson` 与 `state.json`，跑这条用例的 `assert.mjs` 与 `process/*/rule.mjs`，打印逐条结果。
 
 期望的形状是**结局断言全绿、过程断言变红**：
 

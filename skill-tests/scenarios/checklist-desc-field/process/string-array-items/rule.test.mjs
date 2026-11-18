@@ -3,12 +3,11 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import processAssert from './process.mjs';
+import processAssert from './rule.mjs';
 
 // 证据原件：一次真实运行的完整调用序列（脱敏后只留 argv 与 decision）。
 // 测试与证据同源——规则改了而证据没变时，这条会红。
-const EVIDENCE = path.join(import.meta.dirname, 'evidence',
-  'string-array-items-2026-11-17T01-25-37-814Z-7ed8fa.ndjson');
+const EVIDENCE = path.join(import.meta.dirname, 'evidence.ndjson');
 
 const P = '69abc459ebbdbd00000009f0';
 const T = '6afbad50e4b05d0f5b91f1d1';

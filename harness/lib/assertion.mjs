@@ -18,12 +18,44 @@ export async function loadAssert(scenarioDir) {
   return loadAssertionFile(path.join(scenarioDir, 'assert.mjs'));
 }
 
-// 过程断言是可选件（scenarios/<id>/process.mjs）：没写就是不判过程这一面。
-// 它与 assert.mjs 同形——scenario 自己的代码，收调用日志，返回结果数组。
-// 允许缺省而不是报配置错误：一条用例未必有已确认的过程缺陷，
-// 强行要求会让作者为了填满文件而写一条没有证据的规则。
+// 过程断言按**一条规则一个目录**组织：scenarios/<id>/process/<rule-id>/，
+// 里面放 rule.mjs（判据）、RULE.md（问题说明）、evidence.ndjson（依据的原始调用序列）。
+// 规则与它的论据放在一起，加一条规则就加一个目录。
+//
+// 缺省允许：没有 process/ 或里面一条规则都没有，就不判过程这一面——
+// 一条用例未必有已确认的过程缺陷，强行要求会让作者为了填满目录写一条没有证据的规则。
 export async function loadProcessAssert(scenarioDir) {
-  return loadAssertionFile(path.join(scenarioDir, 'process.mjs'));
+  const rulesDir = path.join(scenarioDir, 'process');
+  if (!fs.existsSync(rulesDir)) return null;
+
+  const ids = fs.readdirSync(rulesDir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .sort();
+  if (ids.length === 0) return null;
+
+  const rules = [];
+  for (const id of ids) {
+    const file = path.join(rulesDir, id, 'rule.mjs');
+    if (!fs.existsSync(file)) {
+      // 目录建了却没写判据：静默跳过会让「以为加了一条规则」变成一次无声的空跑。
+      throw new Error(`${path.join(rulesDir, id)} 里没有 rule.mjs`);
+    }
+    rules.push({ id, fn: await loadAssertionFile(file) });
+  }
+
+  // 每条结果带上规则 id：报告要能点名是哪条规则红，而不是只有一句话。
+  return async (input) => {
+    const results = [];
+    for (const { id, fn } of rules) {
+      const produced = await fn(input);
+      if (!Array.isArray(produced)) return produced;
+      results.push(...produced.map((result) => (
+        result && typeof result === 'object' ? { ...result, rule: id } : result
+      )));
+    }
+    return results;
+  };
 }
 
 // 非对象或缺 ok 的元素归一化成一条失败结果：`[null]`（例如 `tasks.map(t => t && {...})`
