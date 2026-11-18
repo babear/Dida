@@ -500,3 +500,45 @@ test('缺断言的报告仍不列出任务小节——那种 run 确实什么都
   assert.match(report, /缺断言/);
   assert.doesNotMatch(report, /预设建出的任务/);
 });
+
+// ─────────────────────────────────────────────────────────────────────────
+// 重试通过要标明（#9）：重试若不出声，就成了掩盖——第一次红过这件事
+// 必须在报告里读得到。重试的是一次新的运行（新 runId、新账本），
+// 所以「首次是什么结论、是哪个 run」由 manifest 的 retry 字段带来。
+// ─────────────────────────────────────────────────────────────────────────
+
+test('重试通过的运行在报告里标明首次的结论与那个 run', () => {
+  const report = renderReport({
+    ...MANIFEST,
+    run: '2026-11-18T10-00-00-000Z-second',
+    retry: {
+      attempt: 2,
+      previousRun: '2026-11-18T09-50-00-000Z-first',
+      previousStatus: 'incomplete',
+    },
+  });
+  assert.match(report, /重试/);
+  assert.match(report, /incomplete/);
+  assert.match(report, /2026-11-18T09-50-00-000Z-first/);
+  assert.match(report, /第 2 次/);
+});
+
+test('一次就过的运行不写重试那一行', () => {
+  const report = renderReport(MANIFEST);
+  // 查报告里真实会出现的措辞（retryNote 的那两句），不是不存在的文案。
+  assert.doesNotMatch(report, /第 \d+ 次运行/);
+  assert.doesNotMatch(report, /首次（/);
+});
+
+// 「重试」不是结论：它不改变判定，只是给读报告的人一个提示。
+// 把重试通过的运行写成 failed/incomplete 的口径会把结论本身弄错。
+test('重试通过不改变判定结论：仍写「通过」', () => {
+  const report = renderReport({
+    ...MANIFEST,
+    run: 'r2',
+    retry: { attempt: 2, previousRun: 'r1', previousStatus: 'incomplete' },
+    assertion: { status: 'passed', results: [] },
+  });
+  assert.match(report, /结局断言 通过/);
+  assert.doesNotMatch(report, /未通过/);
+});

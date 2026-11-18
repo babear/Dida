@@ -256,6 +256,17 @@ export function rejectedSummary(calls) {
   ].filter(Boolean);
 }
 
+// 重试的说明行（#9）。重试的是**一次新的运行**——新 runId、新账本、新会话——
+// 所以它不是「上一页的续写」，而是这一页自己声明「我是第 2 次」。
+// 首次的结论与被顶替的 run 都要点名：只写「第 2 次」的话，人看不出第一次红过，
+// 重试就从「说明一次抖动」变成了「掩盖一次失败」。
+function retryNote(manifest) {
+  const retry = manifest.retry;
+  if (!retry) return null;
+  return `第 ${retry.attempt} 次运行：首次（\`${retry.previousRun}\`）结论为 ${retry.previousStatus}，`
+    + '不重试的那几类结论会直接判红。这次是重试后的结果。';
+}
+
 export function renderReport(manifest) {
   const created = manifest.created ?? [];
   const cleanup = manifest.cleanup ?? { deleted: [], failed: [], remaining: [], mismatched: [] };
@@ -287,6 +298,11 @@ export function renderReport(manifest) {
     renderHeader(manifest),
     runTitle(manifest),
     '',
+  ];
+  // 重试的说明紧跟标题：它是读这份报告前就该知道的前提，不是末尾的附注。
+  const retry = retryNote(manifest);
+  if (retry) lines.push(`> ${retry}`, '');
+  lines.push(
     '## 本次创建的任务',
     '',
     created.length === 0 ? '（没有创建任何任务）' : taskTable(created),
@@ -295,7 +311,7 @@ export function renderReport(manifest) {
     '',
     '## 清场',
     '',
-  ];
+  );
 
   if (cleanup.error) {
     lines.push(`**清场未执行**：${cleanup.error}`);

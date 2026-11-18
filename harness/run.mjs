@@ -16,6 +16,7 @@ import { readCreated } from './lib/created.mjs';
 import { cleanRun } from './lib/cleanup.mjs';
 import { runPreset } from './lib/preset.mjs';
 import { resolveTestProjects } from './lib/projects.mjs';
+import { batchSummaryLines, summarizeBatch } from './lib/batch.mjs';
 import { formatValue, INCOMPLETE_FACT, invalidLabel, renderReport, retentionNote } from './lib/report.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -174,6 +175,18 @@ export function hasCleanupProblem(cleanup) {
     || cleanup.remaining.length > 0;
 }
 
+// 重试（#9）：只重试「会话没正常结束」——那是运行器自己没跑完，重来一次才有意义。
+// 断言未通过（failed）与结果不可用（invalid）都是**结论**，要停下看原因，不是把结论
+// 推迟一次；broken / missing / preset-failed 是用例写错了，重跑不会变绿。
+// 单次全绿是否偶然归 #26 的多次运行，这里不给 passed 套重试。
+// 探针不重试：它没有判定要守，重跑只是再烧一次钱。
+const MAX_ATTEMPTS = 2;
+
+export function shouldRetry({ status, kind = 'scenario' }) {
+  if (kind === 'probe') return false;
+  return status === 'incomplete';
+}
+
 // 终态快照的构建。**要不要取由判定链决定**（assertion.mjs 的 decideAssertion）：
 // 会话正常结束是前置门、可信度检查通过是第二道，两道都过了才轮到这里。这里只负责
 // 取一次并落盘，不自己再判一遍——两处各判一次，就会出现「判定链说没取、这里说取了」。
@@ -184,14 +197,28 @@ export function hasCleanupProblem(cleanup) {
 //
 // error 与 status 分开：错误消息可能是空串，靠 message 的真假判失败会把
 // 空消息的 error 当成成功，写下空 state.json 并让断言在 [] 上判 FAILED。
+//
+// 取失败时再取一次（#9）：会话已经跑完了，重跑整条是浪费一次真实 API；
+// 该重试的只是「取快照」这个动作（基础设施抖动）。同一个 build 跑两遍，
+// 第二次成功就用它；都失败才落 status: 'failed'，留下的是最后一次的错误。
+//
+// `failed` 是**这一层**的状态词（取的动作失败了），不是判定结论：判定链
+// （assertion.mjs）把「快照取不到」折成 invalid（cause: state），因为它的含义是
+// 「结果不可用」而不是「skill 没做到」（ADR-0014）。两层各说各的，别对读。
+const STATE_ATTEMPTS = 2;
+
 export function takeState({ statePath, build }) {
-  try {
-    const state = build();
-    fs.writeFileSync(statePath, JSON.stringify(state, null, 2));
-    return { status: 'ok', state, error: null };
-  } catch (error) {
-    return { status: 'failed', state: [], error: error.message || String(error) };
+  let lastError = null;
+  for (let attempt = 0; attempt < STATE_ATTEMPTS; attempt += 1) {
+    try {
+      const state = build();
+      fs.writeFileSync(statePath, JSON.stringify(state, null, 2));
+      return { status: 'ok', state, error: null };
+    } catch (error) {
+      lastError = error;
+    }
   }
+  return { status: 'failed', state: [], error: lastError.message || String(lastError) };
 }
 
 // 控制台上的快照那一行。三种情形各说各的：没取（判定链在前一面就停了）、取了但失败
@@ -281,7 +308,7 @@ export async function loadScenarioAssertions(scenario) {
   return { assertionFn, processFn };
 }
 
-async function runOne(options, scenario, projects, assertionFn, processFn) {
+async function runOne(options, scenario, projects, assertionFn, processFn, retry = null) {
   const id = scenario.id;
   const runKey = runId();
   const runsDir = ensureRunsDir(repoRoot);
@@ -313,6 +340,7 @@ async function runOne(options, scenario, projects, assertionFn, processFn) {
         calls: {},
         session: {},
         testProjects: projects,
+        ...(retry ? { retry } : {}),
       };
       writeManifest(runDir, manifest);
       writeReport(runDir, manifest);
@@ -443,6 +471,8 @@ async function runOne(options, scenario, projects, assertionFn, processFn) {
     assertion: verdictFields,
     testProjects: projects,
     callerMarker: sandbox.callerMarker,
+    // 重试的说明（#9）：它不参与判定，只是让报告说得出「这是第 2 次、首次是什么」。
+    ...(retry ? { retry } : {}),
   };
 
   return { run: runKey, runDir, sandbox, manifest, session, createdFile };
@@ -567,6 +597,144 @@ export function writeUnusableRun(repoRoot, id, { skillPath, status, detail }) {
   return { runKey, runDir };
 }
 
+// 重试循环（#9）。抽出来是为了让「跑几次、第二次带什么 retry 说明」可测：
+// 住在 main() 里时只能靠真跑一条 scenario 来验，而「只在 incomplete 时跑第二遍」
+// 恰恰是最难靠运气撞到的分支。
+// 每次尝试是一条完整的新运行（新 runId、新账本、新会话），第二次带着首次的
+// 结论与 run id，好让报告与控制台说得出「这是第 2 次，第一次是什么」。
+export async function runWithRetry({ kind, attempt }) {
+  const attempts = [];
+  let outcome = null;
+  while (attempts.length < MAX_ATTEMPTS) {
+    const retry = attempts.length === 0 ? null : {
+      attempt: attempts.length + 1,
+      previousRun: outcome.run,
+      previousStatus: outcome.status,
+    };
+    outcome = await attempt(retry);
+    // 每次尝试的 run/defer 都留下：重试会留下两批现场（首次 incomplete 不清场、
+    // 重试那次若通过会自动清场），按最终那条收会让首次的现场从清单里消失。
+    attempts.push({ status: outcome.status, run: outcome.run, defer: outcome.defer });
+    if (!shouldRetry({ status: outcome.status, kind })) break;
+  }
+  return { ...outcome, attempts };
+}
+
+// 一次完整尝试：跑前清场 → 预设 → 会话 → 判定 → 清场 → 落 manifest/report → 控制台。
+// 抽成函数是为了重试（#9）：重试是**再跑一次完整尝试**（新 runId、新账本、新会话），
+// 不是接着上一次的现场往下走。`retry` 只带给报告与控制台的说明，不参与判定。
+async function attemptScenario({ id, scenario, options, projects, assertionFn, processFn, retry }) {
+  // 跑前清场（问题 3）：上一次这条用例没清场的话，它建的任务还留在清单里，
+  // agent 看到同名任务就不再新建，取样直接失真。按上一次的账本先清一遍。
+  // 只清同 id 的最近一条——别的用例的现场不归这次管。
+  const previous = previousRunOf(repoRoot, id);
+  if (previous) {
+    try {
+      const stale = finishRun({ runDir: previous.runDir, projects, dida: realDida() });
+      console.log(`  cleanup 上一次运行 ${path.basename(previous.runDir)}：删掉 ${stale.deleted.length} 条残留任务`);
+      if (hasCleanupProblem(stale)) console.error('    上一次的收尾没干净，本次取样可能受影响');
+    } catch (error) {
+      console.error(`    上一次运行 ${path.basename(previous.runDir)} 的收尾失败：${error.message}`);
+    }
+  }
+
+  const { run, runDir, sandbox, manifest, session, createdFile } = await runOne(
+    options, scenario, projects, assertionFn, processFn, retry,
+  );
+  const completed = sessionCompleted(session);
+
+  // 预设失败：不开会话、不清场。账本与报告已由 runOne 落盘，--clean 能收尾。
+  // 进不了会话的运行没有判定可给，直接报到汇总里让操作者收。
+  if (manifest.assertion.status === 'preset-failed') {
+    console.error(`PRESET FAILED ${id}  run=${run}`);
+    console.error(`  ${manifest.assertion.detail}`);
+    console.error(`  created=${manifest.created.length} 条（账本保留，用 --clean ${run} 收尾）`);
+    console.error(`  run dir=${path.relative(repoRoot, runDir)}`);
+    // 预设失败时 runOne 已按 defer 的口径落了 cleanup（没有 cleanup 字段），
+    // 账本里建出的任务要人收，所以它进保留清单。
+    return { run, status: manifest.assertion.status, defer: true, ok: false };
+  }
+
+  // 只有 PASSED 才清场（ADR-0014）；探针则永不清场（ADR-0015）。
+  const defer = cleanupGate({
+    status: manifest.assertion.status,
+    hold: options.hold,
+    kind: scenario.kind,
+  });
+  // 运行目录保留与清场是两件事：--keep-sandbox 只留目录，照常清场（README 参数表）。
+  const retained = defer || options.keepSandbox;
+
+  // 先把会话事实落盘，再动清单：清场读账本出错时，manifest 与 report 必须已经在了。
+  writeManifest(runDir, { ...manifest, cleanup: null, sandboxRetained: retained });
+
+  let cleanup;
+  try {
+    cleanup = defer
+      ? emptyCleanup({ deferred: true })
+      : cleanRun({ dida: realDida(), projects, createdFile });
+  } catch (error) {
+    cleanup = emptyCleanup({ error: error.message });
+  }
+  const finalManifest = { ...manifest, cleanup, sandboxRetained: retained };
+  writeManifest(runDir, finalManifest);
+  writeReport(runDir, finalManifest);
+  // 删除失败要让后面三处都说实话：manifest 的 sandboxRetained、报告的「运行目录已删除」、
+  // 控制台的 (removed)。吞掉异常却仍报 removed，读报告的人会以为盘上没有残留。
+  let deleteError = null;
+  if (!retained) {
+    try {
+      fs.rmSync(sandbox.root, { recursive: true, force: true });
+    } catch (error) {
+      deleteError = error.code ?? error.message;
+      console.error(`    运行目录删除失败（${deleteError}）：${sandbox.root}`);
+      writeManifest(runDir, { ...finalManifest, sandboxRetained: true, sandboxDeleteError: deleteError });
+    }
+  }
+
+  // 清场失败只记 log 不中断：每条 scenario 的账本按 runId 隔离，删不掉自己的那几条
+  // 不会影响下一条的判断。退出码仍非零，让人知道有现场要收。
+  const cleanupProblem = hasCleanupProblem(cleanup);
+  // 退出码只反映「这次运行能不能用」（ADR-0015）：
+  //   scenario：除 passed 外都要非零——failed 是 skill 有缺陷，broken 是用例有缺陷，
+  //            invalid 是结果不可用，三者都要人看一眼。
+  //   探针：只有 sampled 是 0。incomplete / invalid 说明这份样本不能用，
+  //        1 就是在告诉脚本「别拿它写断言」。
+  const ok = manifest.assertion.status === (scenario.kind === 'probe' ? 'sampled' : 'passed');
+
+  const verdict = scenario.kind === 'probe'
+    ? { sampled: 'SAMPLED', incomplete: 'INCOMPLETE', invalid: 'INVALID' }[manifest.assertion.status]
+    : {
+      passed: 'PASSED',
+      incomplete: 'INCOMPLETE',
+      failed: 'FAILED',
+      broken: 'BROKEN',
+      invalid: 'INVALID',
+    }[manifest.assertion.status];
+  console.log(`${verdict} ${id}  run=${run}`);
+  if (retry) console.log(`  重试：第 ${retry.attempt} 次，首次 ${retry.previousStatus}（run=${retry.previousRun}）`);
+  console.log(`  skill sha256=${manifest.skill.sha256.slice(0, 16)} files=${manifest.skill.files} git=${manifest.skill.git.rev?.slice(0, 12)}${manifest.skill.git.dirty ? ' (dirty)' : ''}`);
+  console.log(`  model alias=${manifest.model.requested_alias} provider=${manifest.model.provider}（别名不等于实际执行模型，真实映射见 manifest.model.alias_mapping）`);
+  console.log(`  sandbox=${sandbox.root}${retained || deleteError ? ' (retained)' : ' (removed)'}`);
+  console.log(`  transcript=${path.relative(repoRoot, manifest.transcript.path)} events=${manifest.transcript.events} toolCalls=${manifest.transcript.toolCalls}`);
+  console.log(`  calls=${path.relative(repoRoot, manifest.calls.path)} total=${manifest.calls.total} rejected=${manifest.calls.rejected} outOfBounds=${manifest.calls.outOfBounds}`);
+  console.log(`  created=${manifest.created.length} 条${manifest.created.length ? '：' + manifest.created.map((e) => e.id).join('、') : ''}`);
+  console.log(stateLine(manifest));
+  for (const line of verdictLines(manifest.assertion)) console.error(line);
+  reportCleanup(cleanup, run);
+  console.log(`  caller marker=${manifest.callerMarker}`);
+  console.log(`  run dir=${path.relative(repoRoot, runDir)}`);
+  if (!completed) console.log(`  session exit=${session.exitCode} timedOut=${session.timedOut}`);
+
+  // 除了判定结论，清场问题与会话没跑完也要算进这一条的 ok：
+  // 它们是「这次运行能不能用」的一部分，不能因为结论写着 passed 就报绿。
+  return {
+    run,
+    status: manifest.assertion.status,
+    defer,
+    ok: ok && completed && !cleanupProblem && !deleteError,
+  };
+}
+
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   if (options.help) {
@@ -614,8 +782,8 @@ async function main() {
 
   // 清单只收真正开过会话、有现场的 run：NOT FOUND 与 MISCONFIGURED 在开会话之前
   // 就退出了，没有任务也没有运行目录，列进来只会让人去找一个不存在的现场。
-  let failures = 0;
   const retainedRuns = [];
+  const runs = [];
   for (const id of ids) {
     // 缺 assert.mjs 不开会话：两个目录（scenarios/ 与 probes/）的区分就是有没有断言，
     // 跳过会让漏写的用例静默退出回归网、退出码仍是 0。这是用例配置错误，不是断言未通过。
@@ -625,152 +793,71 @@ async function main() {
       scenario = loadScenario(repoRoot, id);
     } catch (error) {
       console.error(`NOT FOUND ${id}  ${error.message}`);
-      failures += 1;
+      runs.push({ scenario: id, status: 'not-found', attempts: [{ status: 'not-found' }] });
       continue;
     }
     let assertionFn;
     let processFn = null;
+    let loadError = null;
     try {
       ({ assertionFn, processFn } = await loadScenarioAssertions(scenario));
     } catch (error) {
+      loadError = error;
+    }
+    if (loadError || !assertionFn) {
+      const status = loadError ? 'broken' : 'missing';
+      const detail = loadError
+        ? `断言模块加载失败：${loadError.message}`
+        : `缺 ${path.join(scenario.dir, 'assert.mjs')}`;
       const { runKey, runDir } = writeUnusableRun(repoRoot, id, {
         skillPath: options.skillPath,
-        status: 'broken',
-        detail: error.message,
+        status,
+        detail,
       });
-      console.error(`MISCONFIGURED ${id}  断言模块加载失败：${error.message}（报告 ${path.relative(repoRoot, runDir)}，run=${runKey}）`);
-      failures += 1;
+      console.error(`MISCONFIGURED ${id}  ${detail}（报告 ${path.relative(repoRoot, runDir)}，run=${runKey}）`);
+      // 用例配置错误不重试：重跑一次不会让它变绿（shouldRetry 会拦，这里也不进重试循环）。
+      runs.push({ scenario: id, status, attempts: [{ status }] });
       continue;
     }
-      if (!assertionFn) {
-        const assertPath = path.join(scenario.dir, 'assert.mjs');
-        const { runKey, runDir } = writeUnusableRun(repoRoot, id, {
-          skillPath: options.skillPath,
-          status: 'missing',
-          detail: `缺 ${assertPath}`,
-        });
-        console.error(`MISCONFIGURED ${id}  缺断言：${path.relative(repoRoot, assertPath)}（报告 ${path.relative(repoRoot, runDir)}，run=${runKey}）`);
-        failures += 1;
-        continue;
-      }
 
     const notice = probeAssertNotice(scenario);
     if (notice) console.log(notice);
 
-    // 跑前清场（问题 3）：上一次这条用例没清场的话，它建的任务还留在清单里，
-    // agent 看到同名任务就不再新建，取样直接失真。按上一次的账本先清一遍。
-    // 只清同 id 的最近一条——别的用例的现场不归这次管。
-    const previous = previousRunOf(repoRoot, id);
-    if (previous) {
-      try {
-        const stale = finishRun({
-          runDir: previous.runDir,
-          projects,
-          dida: realDida(),
-        });
-        console.log(`  cleanup 上一次运行 ${path.basename(previous.runDir)}：删掉 ${stale.deleted.length} 条残留任务`);
-        if (hasCleanupProblem(stale)) console.error('    上一次的收尾没干净，本次取样可能受影响');
-      } catch (error) {
-        console.error(`    上一次运行 ${path.basename(previous.runDir)} 的收尾失败：${error.message}`);
-      }
-    }
-
-    const { run, runDir, sandbox, manifest, session, createdFile } = await runOne(options, scenario, projects, assertionFn, processFn);
-    const completed = sessionCompleted(session);
-
-    // 预设失败：不开会话、不清场。账本与报告已由 runOne 落盘，--clean 能收尾。
-    // 进不了会话的运行没有判定可给，直接报到汇总里让操作者收。
-    if (manifest.assertion.status === 'preset-failed') {
-      retainedRuns.push({ run, scenario: id, status: manifest.assertion.status });
-      console.error(`PRESET FAILED ${id}  run=${run}`);
-      console.error(`  ${manifest.assertion.detail}`);
-      console.error(`  created=${manifest.created.length} 条（账本保留，用 --clean ${run} 收尾）`);
-      console.error(`  run dir=${path.relative(repoRoot, runDir)}`);
-      failures += 1;
-      continue;
-    }
-
-    // 只有 PASSED 才清场（ADR-0014）；探针则永不清场（ADR-0015）。
-    const defer = cleanupGate({
-      status: manifest.assertion.status,
-      hold: options.hold,
+    // 重试（#9）：只重试 incomplete——那是运行器自己没跑完。其余结论都是判定，
+    // 要停下看原因。每次尝试都是一条完整的新运行（新 runId、新账本、新会话），
+    // 所以重试前那一步「跑前清场」会照常把上一次的残留收掉。
+    const outcome = await runWithRetry({
       kind: scenario.kind,
+      attempt: (retry) => {
+        if (retry) console.log(`RETRY ${id}  首次 ${retry.previousStatus}（run=${retry.previousRun}），再跑一次`);
+        return attemptScenario({ id, scenario, options, projects, assertionFn, processFn, retry });
+      },
     });
-    // 运行目录保留与清场是两件事：--keep-sandbox 只留目录，照常清场（README 参数表）。
-    const retained = defer || options.keepSandbox;
-
-    // 先把会话事实落盘，再动清单：清场读账本出错时，manifest 与 report 必须已经在了。
-    writeManifest(runDir, { ...manifest, cleanup: null, sandboxRetained: retained });
-
-    let cleanup;
-    try {
-      cleanup = defer
-        ? emptyCleanup({ deferred: true })
-        : cleanRun({ dida: realDida(), projects, createdFile });
-    } catch (error) {
-      cleanup = emptyCleanup({ error: error.message });
+    const { attempts } = outcome;
+    // 保留清单按每次尝试收，不按最终那条：首次 incomplete 的现场与重试那次的现场
+    // 是两批任务、两个 runId，都得让人能追溯（ADR-0014）。
+    for (const attempt of attempts) {
+      if (attempt.defer) retainedRuns.push({ run: attempt.run, scenario: id, status: attempt.status });
     }
-    const finalManifest = { ...manifest, cleanup, sandboxRetained: retained };
-    writeManifest(runDir, finalManifest);
-    writeReport(runDir, finalManifest);
-    // 删除失败要让后面三处都说实话：manifest 的 sandboxRetained、报告的「运行目录已删除」、
-    // 控制台的 (removed)。吞掉异常却仍报 removed，读报告的人会以为盘上没有残留。
-    let deleteError = null;
-    if (!retained) {
-      try {
-        fs.rmSync(sandbox.root, { recursive: true, force: true });
-      } catch (error) {
-        deleteError = error.code ?? error.message;
-        console.error(`    运行目录删除失败（${deleteError}）：${sandbox.root}`);
-        writeManifest(runDir, { ...finalManifest, sandboxRetained: true, sandboxDeleteError: deleteError });
-      }
-    }
-    if (defer) retainedRuns.push({ run, scenario: id, status: manifest.assertion.status });
-
-    // 清场失败只记 log 不中断：每条 scenario 的账本按 runId 隔离，删不掉自己的那几条
-    // 不会影响下一条的判断。退出码仍非零，让人知道有现场要收。
-    const cleanupProblem = hasCleanupProblem(cleanup);
-    // 退出码只反映「这次运行能不能用」（ADR-0015）：
-    //   scenario：除 passed 外都要非零——failed 是 skill 有缺陷，broken 是用例有缺陷，
-    //            invalid 是结果不可用，三者都要人看一眼。
-    //   探针：只有 sampled 是 0。incomplete / invalid 说明这份样本不能用，
-    //        1 就是在告诉脚本「别拿它写断言」。
-    const ok = manifest.assertion.status === (scenario.kind === 'probe' ? 'sampled' : 'passed');
-    if (!completed || cleanupProblem || !ok || deleteError) failures += 1;
-
-    const verdict = scenario.kind === 'probe'
-      ? { sampled: 'SAMPLED', incomplete: 'INCOMPLETE', invalid: 'INVALID' }[manifest.assertion.status]
-      : {
-        passed: 'PASSED',
-        incomplete: 'INCOMPLETE',
-        failed: 'FAILED',
-        broken: 'BROKEN',
-        invalid: 'INVALID',
-      }[manifest.assertion.status];
-    console.log(`${verdict} ${id}  run=${run}`);
-    console.log(`  skill sha256=${manifest.skill.sha256.slice(0, 16)} files=${manifest.skill.files} git=${manifest.skill.git.rev?.slice(0, 12)}${manifest.skill.git.dirty ? ' (dirty)' : ''}`);
-    console.log(`  model alias=${manifest.model.requested_alias} provider=${manifest.model.provider}（别名不等于实际执行模型，真实映射见 manifest.model.alias_mapping）`);
-    console.log(`  sandbox=${sandbox.root}${retained || deleteError ? ' (retained)' : ' (removed)'}`);
-    console.log(`  transcript=${path.relative(repoRoot, manifest.transcript.path)} events=${manifest.transcript.events} toolCalls=${manifest.transcript.toolCalls}`);
-    console.log(`  calls=${path.relative(repoRoot, manifest.calls.path)} total=${manifest.calls.total} rejected=${manifest.calls.rejected} outOfBounds=${manifest.calls.outOfBounds}`);
-    console.log(`  created=${manifest.created.length} 条${manifest.created.length ? '：' + manifest.created.map((e) => e.id).join('、') : ''}`);
-    console.log(stateLine(manifest));
-    for (const line of verdictLines(manifest.assertion)) console.error(line);
-    reportCleanup(cleanup, run);
-    console.log(`  caller marker=${manifest.callerMarker}`);
-    console.log(`  run dir=${path.relative(repoRoot, runDir)}`);
-    if (!completed) console.log(`  session exit=${session.exitCode} timedOut=${session.timedOut}`);
+    // 判定结论原样入汇总，`ok` 另记「这次运行算不算成功」——把清场问题折成
+    // failed 会让一次通过的判定在汇总里消失（口径见 lib/batch.mjs）。
+    runs.push({ scenario: id, status: outcome.status, ok: outcome.ok, attempts });
   }
 
   // 批跑汇总（ADR-0014）：失败即留现场，跑十条挂六条就是六批任务。
   // 没有这份清单，人下次打开客户端无从追溯该收哪几条。
   for (const line of retainedSummaryLines(retainedRuns)) console.log(line);
+  // 结论分布（#9）：只有全量运行才给。单跑一条时它的结论已经打在那一行上，
+  // 再补一句「批跑汇总：1 条（passed 1）」只是噪声。
+  const summary = summarizeBatch(runs);
+  if (!options.scenario) for (const line of batchSummaryLines(summary)) console.log(line);
   // 流程提醒只在全量运行时给：单跑一条用例时，probes/ 里待着的探针本来就该在，
   // 别的用例的来源状态也不该在这次运行的输出里插话。两条提醒同一个门控。
   if (!options.scenario) {
     for (const line of probesLeftoverLines(listProbes(repoRoot))) console.log(line);
   }
-  if (failures > 0) process.exitCode = 1;
+  // 退出码由汇总统一给（#9）：一条条累加 failures 会在重试时把两次尝试算成两次失败。
+  if (summary.exitCode !== 0) process.exitCode = 1;
 }
 
 // 作为模块被测试 import 时不要执行 main；只有直接运行时才进 CLI。

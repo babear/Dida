@@ -78,6 +78,16 @@ export default (projects) => [
 node harness/run.mjs --scenario <id>
 ```
 
+单跑一条是 TDD 内循环的用法，成本约 $0.03–0.29。`npm test` 是收尾时的全量回归，跑全部 `scenarios/*`：
+
+| 命令 | 跑什么 | 烧 API |
+|---|---|---|
+| `npm run test:harness` | harness 单元测试 | 否 |
+| `npm run test:scenarios` | 用例目录里的断言自检 | 否 |
+| `npm test` | 前两个都绿了才跑全部真实会话 | 是 |
+
+`npm test` 只在 `incomplete`（会话没正常结束）时自动重试一次——断言未通过与结果不可用都是判定，要停下看原因。详见 `harness/README.md` 的「重试」。
+
 探针与 scenario 共用运行目录、会话、账本与可信度检查，分岔在取到终态快照之后：探针到此结束，不跑断言、也不清场（ADR-0015）。所以一次探针成功跑完的结论是 `sampled` 而不是 `passed`，退出码 0 只代表「这份样本可用」。
 
 读完 `runs/<runId>/` 下的三件事实：
