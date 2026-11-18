@@ -1,7 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 
 import processAssert from './process.mjs';
+
+// 证据原件：一次真实运行的完整调用序列（脱敏后只留 argv 与 decision）。
+// 测试与证据同源——规则改了而证据没变时，这条会红。
+const EVIDENCE = path.join(import.meta.dirname, 'evidence',
+  'string-array-items-2026-11-17T01-25-37-814Z-7ed8fa.ndjson');
 
 const P = '69abc459ebbdbd00000009f0';
 const T = '6afbad50e4b05d0f5b91f1d1';
@@ -21,7 +28,18 @@ const READ = { argv: ['task', 'get', P, T, '--json'], decision: 'allow' };
 
 const names = (results) => results.filter((r) => !r.ok).map((r) => r.name);
 
-// 真实记录的形状：先字符串数组建、再 update 补正。两条都该命中。
+// 证据原件本身就是一次真实发生过的缺陷：这份日志在，这条规则就该红。
+// 它是 process.mjs 的论据，也是这份规则的回归测试。
+test('证据原件上的结论：这条规则命中', () => {
+  const calls = fs.readFileSync(EVIDENCE, 'utf8').trim().split(String.fromCharCode(10))
+    .map((line) => JSON.parse(line));
+  const results = processAssert({ calls });
+  assert.equal(results.filter((r) => !r.ok).length, 2, '两条都该命中：字符串数组建、update 补正');
+  assert.match(results[0].actual, /第 8 条/);
+  assert.match(results[1].actual, /第 11 条/);
+});
+
+// 手写的等价夹具：与上面那份证据同形，用来测规则本身而不依赖文件内容。
 test('真实记录里的那一串动作被判为绕路', () => {
   const results = processAssert({ calls: [READ, WRONG_CREATE, READ, FIX_UPDATE, READ] });
   assert.equal(results.filter((r) => !r.ok).length, 2);

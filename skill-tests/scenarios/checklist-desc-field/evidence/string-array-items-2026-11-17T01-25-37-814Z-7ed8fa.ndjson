@@ -1,0 +1,12 @@
+{"argv":["--version"],"decision":"allow"}
+{"argv":["auth","status"],"decision":"allow"}
+{"argv":["project","--help"],"decision":"allow"}
+{"argv":["task","--help"],"decision":"allow"}
+{"argv":["project","list"],"decision":"allow"}
+{"argv":["task","create","--help"],"decision":"allow"}
+{"argv":["project","data","69abc459ebbdbd00000009f0"],"decision":"allow"}
+{"argv":["task","create","--project","69abc459ebbdbd00000009f0","--title","周末露营准备","--content","出发前把要带的东西和要做的事过一遍。","--items","[\"帐篷、睡袋、防潮垫\",\"气罐与炉头\",\"头灯和备用电池\",\"两天的饮用水\",\"防蚊液与常用药\"]","--json"],"decision":"allow"}
+{"argv":["task","get","69abc459ebbdbd00000009f0","6afbad50e4b05d0f5b91f1d1","--json"],"decision":"allow"}
+{"argv":["task","update","--help"],"decision":"allow"}
+{"argv":["task","update","6afbad50e4b05d0f5b91f1d1","--id","6afbad50e4b05d0f5b91f1d1","--project","69abc459ebbdbd00000009f0","--items","帐篷、睡袋、防潮垫,气罐与炉头,头灯和备用电池,两天的饮用水,防蚊液与常用药","--json"],"decision":"allow"}
+{"argv":["task","get","69abc459ebbdbd00000009f0","6afbad50e4b05d0f5b91f1d1","--json"],"decision":"allow"}
