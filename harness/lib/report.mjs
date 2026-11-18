@@ -267,6 +267,46 @@ function retryNote(manifest) {
     + '不重试的那几类结论会直接判红。这次是重试后的结果。';
 }
 
+// 质量评价与人工复核表（#10）：两段都只写报告，不参与判定，也不进退出码。
+// 判定 agent 没跑成时写「判定缺失」而不是省略——省略会让读者以为这次评过、
+// 只是没发现问题，那是把没做的事说成做了。
+// 两者都返回 null 表示「这份 manifest 里没有这一段」，调用方据此整节省略。
+
+export function renderQuality(judgement) {
+  if (!judgement) return null;
+  const lines = ['## 质量评价', ''];
+  if (judgement.status !== 'ok') {
+    lines.push(`**判定缺失**：${judgement.reason ?? '判定 agent 没有给出结论'}。`, '');
+    lines.push('这一段不影响本次的判定结论与退出码。');
+    return lines.join('\n');
+  }
+  lines.push('这一节不参与判定，也不影响退出码。', '');
+  for (const dimension of judgement.dimensions ?? []) {
+    lines.push(`### ${dimension.label}`, '', dimension.body, '');
+  }
+  return lines.join('\n').trimEnd();
+}
+
+export function renderReview(review) {
+  if (!Array.isArray(review) || review.length === 0) return null;
+  const rows = review.map((entry) => {
+    if (entry.missingFields?.length) {
+      const missing = entry.missingFields.map((field) => `\`${field}\``).join(' 与 ');
+      return `- ${entry.title ?? '（条目缺标题）'}：**条目缺 ${missing}**，改 \`scenario.json\` 的 \`review\``;
+    }
+    // AC 要求每条给出任务 id：解析不到 id 时把话说出来，不写成一条「没有 id 的条目」。
+    const id = entry.id ? `\`${entry.id}\`` : `未对上本次创建的任务（${entry.title}）`;
+    return `- ${id}：${entry.expect}`;
+  });
+  return [
+    '## 人工复核',
+    '',
+    '以下判断自动化不了，需要去滴答客户端看一眼。这一节不参与判定，也不影响退出码。',
+    '',
+    ...rows,
+  ].join('\n');
+}
+
 export function renderReport(manifest) {
   const created = manifest.created ?? [];
   const cleanup = manifest.cleanup ?? { deleted: [], failed: [], remaining: [], mismatched: [] };
@@ -367,6 +407,11 @@ export function renderReport(manifest) {
     if (line) lines.push(line);
   }
   lines.push(`- 运行目录${manifest.sandboxRetained === false ? '已删除' : '保留'}：${manifest.sandbox}`);
+
+  // 这两段只写不判：放在判定与清场之后、模型信息之前，读者读完结论往下就是「还要人看什么」。
+  for (const section of [renderQuality(manifest.judgement), renderReview(manifest.review)]) {
+    if (section) lines.push('', section);
+  }
 
   lines.push('', '## 模型', '');
   lines.push('CLI 自报的是别名，不是实际执行的模型；真实模型看下面的映射。', '');

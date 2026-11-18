@@ -174,3 +174,20 @@ test('探针能找到就算成功加载，不因为缺 assert.mjs 而报错', (t
   writeProbe(root, 'p1', { prompt: '原话' });
   assert.doesNotThrow(() => loadScenario(root, 'p1'));
 });
+
+// 人工复核表（#10）：条目在 scenario.json 的 review 里声明。
+// 它是数据不是判据——读出来给报告渲染，形状写错也不让整次运行停下。
+test('loadScenario 读出 review 声明，原样交给报告', (t) => {
+  const root = tmpRepo(t);
+  writeScenario(root, 's1', {
+    prompt: 'x',
+    review: [{ title: 'CHECKLIST 任务', expect: '标题、5 条检查事项' }],
+  });
+  assert.deepEqual(loadScenario(root, 's1').review, [{ title: 'CHECKLIST 任务', expect: '标题、5 条检查事项' }]);
+});
+
+test('没声明 review 时是 null，报告据此整节省略', (t) => {
+  const root = tmpRepo(t);
+  writeScenario(root, 's1', { prompt: 'x' });
+  assert.equal(loadScenario(root, 's1').review, null);
+});

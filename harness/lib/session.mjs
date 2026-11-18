@@ -54,27 +54,30 @@ export const AGENT_NAME = 'dida-scenario';
 const SESSION_TIMEOUT_MS = 15 * 60 * 1000;
 
 // 工具面只有 agents.json 一处定义，--allowedTools 从它派生，避免两份字面量各自漂移
-export function toolFaceOf(agentsPath) {
+export function toolFaceOf(agentsPath, agentName = AGENT_NAME) {
   const agents = JSON.parse(fs.readFileSync(agentsPath, 'utf8'));
-  const agent = agents[AGENT_NAME];
+  const agent = agents[agentName];
   if (!agent?.tools?.length) {
-    throw new Error(`${agentsPath} 里没有 ${AGENT_NAME} 的 tools`);
+    throw new Error(`${agentsPath} 里没有 ${agentName} 的 tools`);
   }
   return agent.tools;
 }
 
-export function buildSessionArgv({ prompt, agentsPath }) {
+export function buildSessionArgv({ prompt, agentsPath, agentName = AGENT_NAME, addDirs = [] }) {
   return [
     '-p',
     prompt,
     '--agents',
     agentsPath,
     '--agent',
-    AGENT_NAME,
+    agentName,
     '--allowedTools',
-    toolFaceOf(agentsPath).join(','),
+    toolFaceOf(agentsPath, agentName).join(','),
     '--permission-mode',
     'dontAsk',
+    // 读 cwd 之外的目录要显式授权：dontAsk 下 Read 碰到没授权的路径会被拒。
+    // 被测 agent 只读 cwd（运行目录的 work/），用不上它；判定 agent 要读 runs/<runId>/。
+    ...(addDirs.length > 0 ? ['--add-dir', ...addDirs] : []),
     '--output-format',
     'stream-json',
     '--verbose',
@@ -87,7 +90,7 @@ export function sessionCompleted(session) {
   return session.exitCode === 0 && !session.timedOut;
 }
 
-export function runSession({ argv, cwd, env, transcriptPath }) {
+export function runSession({ argv, cwd, env, transcriptPath, timeoutMs = SESSION_TIMEOUT_MS }) {
   return new Promise((resolve, reject) => {
     const out = fs.createWriteStream(transcriptPath, { flags: 'w' });
     const errChunks = [];
@@ -102,7 +105,7 @@ export function runSession({ argv, cwd, env, transcriptPath }) {
     const timer = setTimeout(() => {
       timedOut = true;
       child.kill();
-    }, SESSION_TIMEOUT_MS);
+    }, timeoutMs);
 
     child.stdout.on('data', (chunk) => out.write(chunk));
     child.stderr.on('data', (chunk) => errChunks.push(chunk));
