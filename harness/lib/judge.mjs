@@ -1,4 +1,5 @@
-import os from 'node:os';
+import fs from 'node:fs';
+import path from 'node:path';
 
 import { buildSessionArgv, parseTranscript, runSession, sanitizeEnv, sessionCompleted } from './session.mjs';
 
@@ -14,7 +15,7 @@ export const DIMENSIONS = [
   { key: 'read-before-write', label: '先读后改' },
 ];
 
-export function buildJudgePrompt({ scenario, prompt, tracePath, callsPath, created = [] }) {
+export function buildJudgePrompt({ scenario, prompt, digestPath, created = [] }) {
   const tasks = created.length === 0
     ? '（没有建出任务）'
     : created.map((entry) => `- \`${entry.id}\` ${entry.title ?? '（无标题）'}`).join('\n');
@@ -24,8 +25,7 @@ export function buildJudgePrompt({ scenario, prompt, tracePath, callsPath, creat
     '用户原话：',
     prompt,
     '',
-    `会话轨迹（stream-json NDJSON，每次工具调用的入参与结果）：${tracePath}`,
-    `dida 调用日志（每行 {argv, at, decision}）：${callsPath}`,
+    `会话摘要（每次工具调用一行，含它的结果片段；dida 调用另附 shim 记下的 argv）：${digestPath}`,
     '本次建出的任务：',
     tasks,
     '',
@@ -36,6 +36,95 @@ export function buildJudgePrompt({ scenario, prompt, tracePath, callsPath, creat
     '不要输出这三节之外的任何内容，不要给总分。',
     `这次评测的对象是 ${scenario}。`,
   ].join('\n');
+}
+
+// 摘要只留判断三个维度要用的东西：谁在什么时候调了什么、结果长什么样。
+// 原始轨迹里那 1994 条事件全塞进去，等于让判定 agent 自己去翻——实测 40 轮、$0.32。
+// 每条结果截断到 RESULT_CHARS：一份长文件输出足以把整份摘要撑成另一份轨迹。
+const RESULT_CHARS = 600;
+const INPUT_CHARS = 400;
+
+function clip(text, limit) {
+  const value = typeof text === 'string' ? text : JSON.stringify(text ?? '');
+  return value.length > limit ? `${value.slice(0, limit)}…（截断，共 ${value.length} 字）` : value;
+}
+
+// 摘要会进另一个模型会话，凭据不该跟着走：`dida auth status` 的输出里就有 token。
+// 只留前缀，够判「已登录」这件事，不够拿来用。
+const SECRET = /(\b(?:token|secret|password|api[_-]?key)\b\s*[:=]\s*"?)([^\s"',]{6})([^\s"',]*)/gi;
+
+export function redactSecrets(text) {
+  return text.replace(SECRET, (_, prefix, head, rest) => `${prefix}${head}…（已脱敏，原 ${head.length + rest.length} 字）`);
+}
+
+// 工具调用的一行：名字 + 关键入参。只列有用字段，不把整个 input 倒出来。
+function callLine(block) {
+  const input = block.input ?? {};
+  const detail = input.command ?? input.file_path ?? input.pattern ?? input.skill ?? input.path ?? JSON.stringify(input);
+  return `- [${block.name}] ${clip(detail, INPUT_CHARS)}`;
+}
+
+function resultText(block) {
+  const content = block.content;
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content.filter((part) => part?.type === 'text').map((part) => part.text).join('\n');
+  }
+  return '';
+}
+
+// 一段会话的摘要是给人（judge）读的叙述，不是可解析的数据结构：它只进 prompt 指向的文件。
+// calls 是 shim 记的真 argv，与轨迹里的命令字符串各有各的用途——后者是 agent 怎么写的，
+// 前者是实际执行了什么。
+export function buildDigest({ events = [], calls = [] }) {
+  const results = new Map();
+  for (const event of events) {
+    if (event.type !== 'user') continue;
+    for (const block of event.message?.content ?? []) {
+      if (block?.type === 'tool_result' && block.tool_use_id) {
+        results.set(block.tool_use_id, resultText(block));
+      }
+    }
+  }
+
+  const lines = [];
+  let index = 0;
+  for (const event of events) {
+    if (event.type !== 'assistant') continue;
+    for (const block of event.message?.content ?? []) {
+      if (block?.type !== 'tool_use') continue;
+      index += 1;
+      lines.push(`### ${index}. ${block.name}`);
+      lines.push(callLine(block).slice(2));
+      const outcome = results.get(block.id);
+      if (outcome) lines.push(`结果：${redactSecrets(clip(outcome, RESULT_CHARS))}`);
+      lines.push('');
+    }
+  }
+
+  if (calls.length > 0) {
+    lines.push('## dida 调用（shim 记录的真实 argv）', '');
+    for (const call of calls) {
+      const decision = call.decision && call.decision !== 'allowed' ? `（${call.decision}${call.reason ? `：${call.reason}` : ''}）` : '';
+      lines.push(`- \`dida ${(call.argv ?? []).join(' ')}\`${decision}`);
+    }
+  }
+  return lines.join('\n').trimEnd();
+}
+
+// 判定 agent 的沙箱：run-<runId>/judge/。它只放 cwd（空的 work/）与一份摘要，
+// skill 副本、materials、shim 都不在这里——judge 评的是会话，不是去读被测的那份 skill。
+// config 里只留 ANTHROPIC_* 键：与被测会话同一个模型与凭据，跨运行才可比。
+export function createJudgeSandbox({ runDir, anthropicEnv, digest }) {
+  const root = path.join(runDir, 'judge');
+  const workDir = path.join(root, 'work');
+  const configDir = path.join(root, 'config');
+  fs.mkdirSync(workDir, { recursive: true });
+  fs.mkdirSync(configDir, { recursive: true });
+  fs.writeFileSync(path.join(configDir, 'settings.json'), JSON.stringify({ env: anthropicEnv }, null, 2));
+  const digestPath = path.join(workDir, 'digest.md');
+  fs.writeFileSync(digestPath, `${digest}\n`);
+  return { root, workDir, configDir, digestPath };
 }
 
 // 按三个固定标题切段。只认标题逐字相同的行：判定 agent 换个说法就说明它没按约定作答，
@@ -88,19 +177,15 @@ export function judgeTextOf(events) {
 //
 // cwd 取系统临时目录，不是运行目录也不是仓库：那两个位置会继承 CLAUDE.md 与那里的 skill，
 // 而判定 agent 读的是会话记录，不是项目说明。
-export async function judgeRun({ prompt, agentsPath, transcriptPath, runDir, configDir, runSessionFn = runSession }) {
+export async function judgeRun({ prompt, agentsPath, transcriptPath, workDir, configDir, runSessionFn = runSession }) {
   let session;
   try {
     session = await runSessionFn({
-      argv: buildSessionArgv({
-        prompt,
-        agentsPath,
-        agentName: JUDGE_AGENT_NAME,
-        // 判定 agent 的 cwd 是系统临时目录，要读的 runs/<runId>/ 在它之外：
-        // dontAsk 下不显式授权就会每次都被拒，落成「判定缺失」而看不出原因。
-        addDirs: runDir ? [runDir] : [],
-      }),
-      cwd: os.tmpdir(),
+      argv: buildSessionArgv({ prompt, agentsPath, agentName: JUDGE_AGENT_NAME }),
+      // cwd 是判定 agent 自己的沙箱 work/，里面只有摘要（见 createJudgeSandbox）。
+      // 不以运行目录或仓库为 cwd：那两个位置带着 skill 副本、materials 与原始轨迹，
+      // 都是噪音，会把评价往 skill 的措辞上带。
+      cwd: workDir,
       env: { ...sanitizeEnv(process.env), ...(configDir ? { CLAUDE_CONFIG_DIR: configDir } : {}) },
       transcriptPath,
       timeoutMs: JUDGE_TIMEOUT_MS,

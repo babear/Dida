@@ -67,3 +67,18 @@ prompt 里给出轨迹路径、调用日志路径、用户原话与建出的任�
 - 每条 scenario 多一次短会话的成本（判定 agent 只读几个文件）。
 - 判定 agent 的输出稳定性依赖 prompt 里的三个固定标题；改标题就是改报告格式。
 - 人工复核表要靠人真的去看，报告只是把「该看什么」摆出来。
+
+## 补充（2026-11-19）：判定 agent 有自己的沙箱，读摘要不读原始轨迹
+
+上面「判定 agent 走单独的 agent 定义」一节只说了工具面，没说过它的工作目录。实现时它直接以 `os.tmpdir()` 为 cwd、用 `--add-dir` 授权整个 `runs/<runId>/`，结果它读到了 `run-<runId>/config/skills/dida-cli/`（被测的 skill 副本）与 `work/materials/`——**评价因此可能被 skill 自己的措辞带偏**，那正是被评测的对象。
+
+同时它拿到的是原始轨迹的路径。实测一次：轨迹 507KB、1994 条事件，判定 agent 花 **40 轮、$0.324** 在里面翻，是被测会话（21 轮、$0.1295）的 2.5 倍；而它多数调用是在同一个文件上换着正则搜。
+
+**决定：**
+
+1. 判定 agent 有自己的沙箱 `run-<runId>/judge/`，cwd 是其中的 `work/`，里面**只有**一份 harness 抽好的摘要 `digest.md`；`config/` 只放 `ANTHROPIC_*` 键（与被测会话同模型同凭据）。它读不到 skill 副本、materials、shim 与原始轨迹。不再需要 `--add-dir`。
+2. 摘要由 harness 从轨迹与调用日志生成：每次工具调用一行（名字 + 关键入参），附结果片段（截断 600 字）与 shim 记的真 argv。不放进 assistant 的正文与思考——判断依据是动作，不是它怎么想。约 10KB，是原始轨迹的 1/50。
+3. 摘要里的凭据类字段（`token:` / `secret:` / `password:` / `api_key:`）脱敏。`dida auth status` 的输出里就带 token，而摘要会进另一个模型会话。
+4. 摘要落在沙箱 cwd 里（`judge/work/digest.md`），与 `judge.ndjson` 一起留在 run 目录，事后可核对判定 agent 到底看到了什么。
+
+**被否掉的替代方案：** 同一个运行目录放两个 agent、靠路径隔离。运行目录里本就是 skill 副本 + materials + shim 的混合体，隔离要靠「这个 agent 能读哪些子目录」这条易破的约定；分一个目录是结构上的保证，不用记得约束。

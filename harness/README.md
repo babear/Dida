@@ -150,7 +150,9 @@ node harness/replay.mjs --scenario <id> --run <runId>
 
 判定链之后还有两段**只写报告、不进判定**的内容（见 ADR-0017）：
 
-- **质量评价**：会话结束后另起一个只读的判定 agent（`dida-judge`，工具面 `Read` / `Glob` / `Grep`），读轨迹与调用日志，按绕路、冗余操作、先读后改三个固定维度作答。报告里是「## 质量评价」小节。
+- **质量评价**：会话结束后另起一个只读的判定 agent（`dida-judge`，工具面 `Read` / `Glob` / `Grep`），按绕路、冗余操作、先读后改三个固定维度作答。报告里是「## 质量评价」小节。
+  - 它读的是 harness 抽好的**会话摘要**（每次工具调用一行 + 结果片段 + shim 记的 dida argv，约 10KB），不是原始轨迹（实测 507KB）。凭据类字段（token 等）在摘要里脱敏。
+  - 它有**自己的沙箱** `run-<runId>/judge/`：cwd 是空的 `work/` 加那份摘要，`config/` 只放 `ANTHROPIC_*`。读不到被测 agent 的 skill 副本、materials 与原始轨迹——那些是噪音，会把评价往 skill 的措辞上带。
 - **人工复核表**：scenario 在 `scenario.json` 的 `review` 里声明条目，报告里是「## 人工复核」小节，每条给出任务 id 与预期在客户端看到的内容。
 
 两段都不产生 `status`，不影响 `ok`、退出码与清场门控。**判定 agent 失败时 scenario 结果不受影响**：报告照样有这一段，写「判定缺失」与原因（没能启动 / 没正常结束 / 轨迹读不出 / 没有结论文本 / 输出缺维度）。探针不启动判定 agent。判定 agent 用运行目录里那份 settings，与被测会话同一个模型与凭据。
@@ -265,6 +267,7 @@ run-<runId>/
 |---|---|
 | `trace.ndjson` | 被测会话的原始轨迹 |
 | `judge.ndjson` | 判定 agent 的轨迹（仅 scenario；它的结论已写进报告，这里留原始输出供追溯） |
+| `judge/work/digest.md` | 给判定 agent 的会话摘要（它沙箱的 cwd；凭据已脱敏） |
 | `calls.ndjson` | shim 记下的调用序列，每行 `{argv, at, decision}`；被拒的另有 `reason` 与 `targets` |
 | `created.ndjson` | 本 run 建成并立刻记账的任务，一行一条；清场与断言都只认这一份 |
 | `state.json` | 终态快照：账本里每个 id 取回的现状，取不到的记 `null`。按测试清单枚举定位，枚举不到才回退账本的 `projectId`。断言读它。会话没正常结束时不取、不生成（前置门没过，判定链未开始）；会话正常结束时在结局断言那一刻取（早于清场），可信度检查不过时不取；列清单失败时不写这个文件（不写比写空数组诚实） |

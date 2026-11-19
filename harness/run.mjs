@@ -18,7 +18,7 @@ import { runPreset } from './lib/preset.mjs';
 import { resolveTestProjects } from './lib/projects.mjs';
 import { batchSummaryLines, summarizeBatch } from './lib/batch.mjs';
 import { formatValue, INCOMPLETE_FACT, invalidLabel, renderReport, retentionNote } from './lib/report.mjs';
-import { buildJudgePrompt, judgeRun, resolveReview, reviewEntriesOf } from './lib/judge.mjs';
+import { buildDigest, buildJudgePrompt, createJudgeSandbox, judgeRun, resolveReview, reviewEntriesOf } from './lib/judge.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const AGENTS_SOURCE_PATH = path.join(repoRoot, 'harness', 'agents.json');
@@ -433,26 +433,33 @@ async function runOne(options, scenario, projects, assertionFn, processFn, retry
   // 把整份任务清单复制进 manifest。
   const { snapshot, ...verdictFields } = verdict;
 
-  // 质量评价（#10）：会话结束后另起一个只读的判定 agent，读轨迹与调用日志。
-  // 它只写报告，**不参与判定**：这里拿到什么都只进 manifest，status 与退出码不看它。
+  // 质量评价（#10）：会话结束后另起一个只读的判定 agent。它只写报告，**不参与判定**：
+  // 这里拿到什么都只进 manifest，status 与退出码不看它。
   // 失败折成 missing 而不是让 runOne 抛——抛了这次会话的结论、清场与报告全丢。
-  const judgement = !needsJudgement(scenario.kind)
-    ? null
-    : await judgeRun({
+  //
+  // 它读的是 harness 抽好的摘要，不是原始轨迹：轨迹里 1994 条事件全交给它，
+  // 等于把找线索的活推过去（实测 40 轮、$0.32，是被测会话的 2.5 倍）。
+  // 摘要落在判定 agent 自己的沙箱 run-<runId>/judge/ 里，cwd 是其中的 work/。
+  let judgement = null;
+  if (needsJudgement(scenario.kind)) {
+    const judgeSandbox = createJudgeSandbox({
+      runDir,
+      anthropicEnv: sandbox.anthropicEnv,
+      digest: buildDigest({ events, calls }),
+    });
+    judgement = await judgeRun({
       prompt: buildJudgePrompt({
         scenario: id,
         prompt: scenario.prompt,
-        tracePath: transcriptPath,
-        callsPath: callLogPath,
+        digestPath: judgeSandbox.digestPath,
         created,
       }),
       agentsPath: sandbox.agentsPath,
       transcriptPath: path.join(runDir, 'judge.ndjson'),
-      // 判定 agent 要读的路径都在 runDir 下，dontAsk 下要显式授权。
-      runDir,
-      // 与运行目录同一份 settings：判定 agent 与被测会话用同一个模型与凭据。
-      configDir: sandbox.configDir,
+      workDir: judgeSandbox.workDir,
+      configDir: judgeSandbox.configDir,
     });
+  }
 
   const manifest = {
     run: runKey,

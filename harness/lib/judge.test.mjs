@@ -5,7 +5,9 @@ import os from 'node:os';
 import path from 'node:path';
 
 import {
+  buildDigest,
   buildJudgePrompt,
+  createJudgeSandbox,
   DIMENSIONS,
   judgeRun,
   judgeTextOf,
@@ -21,26 +23,31 @@ import { needsJudgement } from '../run.mjs';
 // 会话连判定结论都落不下。
 // ─────────────────────────────────────────────────────────────────────────
 
-const TRACE = 'C:\\runs\\x\\trace.ndjson';
-const CALLS = 'C:\\runs\\x\\calls.ndjson';
+const DIGEST = 'C:\\runs\\x\\judge\\work\\digest.md';
 
-test('prompt 给出轨迹与调用日志的路径，判定 agent 才读得到依据', () => {
+test('prompt 只指向摘要文件，判定 agent 才读得到依据', () => {
   const prompt = buildJudgePrompt({
     scenario: 's1',
     prompt: '把 materials/plan.md 建成检查清单',
-    tracePath: TRACE,
-    callsPath: CALLS,
+    digestPath: DIGEST,
     created: [{ id: 'aaaa00000000000000000001', title: '装修准备' }],
   });
-  assert.match(prompt, /C:\\runs\\x\\trace\.ndjson/);
-  assert.match(prompt, /C:\\runs\\x\\calls\.ndjson/);
+  assert.match(prompt, /digest\.md/);
   assert.match(prompt, /把 materials\/plan\.md 建成检查清单/);
   assert.match(prompt, /aaaa00000000000000000001/);
 });
 
+// 原始轨迹是噪音：1994 条事件、507KB，judge 会花 30 次调用在里面翻。
+// prompt 里不能再出现它的路径，否则等于请它去读。
+test('prompt 不指向原始轨迹或调用日志', () => {
+  const prompt = buildJudgePrompt({ scenario: 's1', prompt: 'x', digestPath: DIGEST });
+  assert.doesNotMatch(prompt, /trace\.ndjson/);
+  assert.doesNotMatch(prompt, /calls\.ndjson/);
+});
+
 // 三个维度是 AC 的点名项。dimensions 少一个，报告那段就不算「覆盖三面」。
 test('prompt 点名三个维度，且与 DIMENSIONS 同源', () => {
-  const prompt = buildJudgePrompt({ scenario: 's1', prompt: 'x', tracePath: TRACE, callsPath: CALLS });
+  const prompt = buildJudgePrompt({ scenario: 's1', prompt: 'x', digestPath: DIGEST });
   assert.equal(DIMENSIONS.length, 3);
   for (const dimension of DIMENSIONS) assert.match(prompt, new RegExp(dimension.label));
   assert.match(prompt, /绕路/);
@@ -49,7 +56,7 @@ test('prompt 点名三个维度，且与 DIMENSIONS 同源', () => {
 });
 
 test('没建出任务时 prompt 说清楚，不留一张空表', () => {
-  const prompt = buildJudgePrompt({ scenario: 's1', prompt: 'x', tracePath: TRACE, callsPath: CALLS, created: [] });
+  const prompt = buildJudgePrompt({ scenario: 's1', prompt: 'x', digestPath: DIGEST, created: [] });
   assert.match(prompt, /没有建出任务/);
 });
 
@@ -223,33 +230,22 @@ test('正式用例要起判定 agent', () => {
   assert.equal(needsJudgement('scenario'), true);
 });
 
-// 判定 agent 的 cwd 是系统临时目录，要读的 runs/<runId>/ 在它之外（#10）。
-// dontAsk 下不显式授权就每次被拒——那种失败只会表现为「判定缺失」，看不出是权限问题。
-test('judgeRun 把运行目录加进 --add-dir', async (t) => {
+// 判定 agent 有自己的沙箱（#10）：cwd 是 run-<runId>/judge/work/，里面只有摘要。
+// 它读不到被测 agent 的 skill 副本、materials 与原始轨迹——那些是噪音，
+// 让评价被 skill 自己的措辞带偏。也不该需要 --add-dir：要读的都在 cwd 里。
+test('judgeRun 以 judge/work 为 cwd，不传 --add-dir', async (t) => {
   const fixture = judgeFixture(t, { transcript: resultLine(FULL_TEXT) });
   let seen = null;
   const out = await judgeRun({
     prompt: 'p',
     agentsPath: fixture.agentsPath,
     transcriptPath: fixture.transcriptPath,
-    runDir: 'C:\runs\r1',
-    runSessionFn: async ({ argv }) => { seen = argv; return { exitCode: 0, timedOut: false, stderr: '' }; },
+    workDir: 'C:\\Temp\\run-x\\judge\\work',
+    runSessionFn: async (input) => { seen = input; return { exitCode: 0, timedOut: false, stderr: '' }; },
   });
   assert.equal(out.status, 'ok');
-  const at = seen.indexOf('--add-dir');
-  assert.ok(at > -1, '必须传 --add-dir');
-  assert.equal(seen[at + 1], 'C:\runs\r1');
-});
-
-test('没有 runDir 时不传 --add-dir，不造一个空目录参数', async () => {
-  let seen = null;
-  await judgeRun({
-    prompt: 'p',
-    agentsPath: path.join(import.meta.dirname, '..', 'agents.json'),
-    transcriptPath: path.join(os.tmpdir(), 'nope-judge.ndjson'),
-    runSessionFn: async ({ argv }) => { seen = argv; return { exitCode: 1, timedOut: false, stderr: '' }; },
-  });
-  assert.equal(seen.includes('--add-dir'), false);
+  assert.equal(seen.cwd, 'C:\\Temp\\run-x\\judge\\work');
+  assert.equal(seen.argv.includes('--add-dir'), false, '要读的都在 cwd 里，不必再授权外部目录');
 });
 
 // AC：复核清单每条给出任务 id。条目可以只写标题，跑完对着账本解析。
@@ -275,4 +271,109 @@ test('条目直接写 id 时原样保留，不再按标题找', () => {
 test('只写 id 不写标题也算完整条目', () => {
   const [entry] = reviewEntriesOf([{ id: 'bbbb00000000000000000002', expect: 'x' }]);
   assert.deepEqual(entry.missingFields, undefined);
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// 摘要（#10 的修正）：判定 agent 读的不是原始轨迹，是 harness 抽好的一份摘要。
+// 原始轨迹里 1994 条事件全部塞进去，等于把找线索的活推给它——实测 40 轮、$0.32，
+// 是被测会话的 2.5 倍。摘要只留判断三个维度需要的：每次工具调用的动作与结果片段。
+// ─────────────────────────────────────────────────────────────────────────
+
+const ASSISTANT = (blocks) => ({ type: 'assistant', message: { role: 'assistant', content: blocks } });
+const RESULT = (id, content) => ({
+  type: 'user',
+  message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content }] },
+});
+
+test('摘要按顺序列出每次工具调用与它的结果', () => {
+  const digest = buildDigest({
+    events: [
+      ASSISTANT([{ type: 'tool_use', id: 'a', name: 'Read', input: { file_path: 'materials/plan.md' } }]),
+      RESULT('a', '# 周末露营准备\n出发前过一遍'),
+      ASSISTANT([{ type: 'tool_use', id: 'b', name: 'PowerShell', input: { command: 'dida task create --title x' } }]),
+      RESULT('b', 'ID: 6afdab19e4b0d2656c162052'),
+    ],
+  });
+  assert.match(digest, /Read/);
+  assert.match(digest, /materials\/plan\.md/);
+  assert.match(digest, /PowerShell/);
+  assert.match(digest, /task create/);
+  assert.match(digest, /6afdab19e4b0d2656c162052/);
+  assert.ok(digest.indexOf('materials/plan.md') < digest.indexOf('task create'), '按发生顺序');
+});
+
+// 结果可能是长文件、长 JSON：截断，否则摘要就成了另一份原始轨迹。
+test('单个结果截断，不让一份长输出吃掉整份摘要', () => {
+  const long = 'x'.repeat(3000);
+  const digest = buildDigest({
+    events: [
+      ASSISTANT([{ type: 'tool_use', id: 'a', name: 'Read', input: { file_path: 'big.md' } }]),
+      RESULT('a', long),
+    ],
+  });
+  assert.ok(digest.length < 1500, `摘要不该被一份长输出撑大：${digest.length}`);
+});
+
+test('工具结果里没有对应调用的，不凭空造一条', () => {
+  const digest = buildDigest({ events: [RESULT('orphan', '孤立的输出')] });
+  assert.doesNotMatch(digest, /孤立的输出/);
+});
+
+test('摘要不含 assistant 的思考与正文——判断依据是动作，不是它怎么想', () => {
+  const digest = buildDigest({
+    events: [
+      ASSISTANT([
+        { type: 'text', text: '我先看一下这个文件' },
+        { type: 'thinking', thinking: '内部推理' },
+        { type: 'tool_use', id: 'a', name: 'Read', input: { file_path: 'x.md' } },
+      ]),
+      RESULT('a', '内容'),
+    ],
+  });
+  assert.doesNotMatch(digest, /我先看一下这个文件/);
+  assert.doesNotMatch(digest, /内部推理/);
+});
+
+// 偏离调用日志（shim 记的真 argv）是判断「走了哪些 dida 命令」的权威来源，
+// 轨迹里的命令字符串可能被 shell 包装或改写。摘要把两者放在一起。
+test('摘要带 dida 调用的 argv，不只是轨迹里的命令字符串', () => {
+  const digest = buildDigest({
+    events: [
+      ASSISTANT([{ type: 'tool_use', id: 'a', name: 'PowerShell', input: { command: 'dida task create --title x' } }]),
+      RESULT('a', 'ID: 6afdab19e4b0d2656c162052'),
+    ],
+    calls: [{ argv: ['task', 'create', '--title', 'x'], decision: 'allowed' }],
+  });
+  assert.match(digest, /task create --title x/);
+});
+
+// 判定 agent 的沙箱（#10）放在 run-<runId>/judge/：cwd 里只有一份摘要，
+// config 里只有 ANTHROPIC_* 键。skill 副本、materials、shim 都不在这里。
+test('判定沙箱只给摘要与凭据，不给被测 skill 与 materials', (t) => {
+  const runDir = fs.mkdtempSync(path.join(os.tmpdir(), 'judge-sandbox-'));
+  t.after(() => fs.rmSync(runDir, { recursive: true, force: true }));
+
+  const sb = createJudgeSandbox({ runDir, anthropicEnv: { ANTHROPIC_MODEL: 'x' }, digest: '# 会话摘要' });
+
+  assert.equal(path.dirname(sb.workDir), sb.root, 'work/ 在 judge/ 下');
+  assert.equal(path.dirname(sb.root), runDir, 'judge/ 在 run 目录下');
+  assert.equal(fs.readFileSync(sb.digestPath, 'utf8').trim(), '# 会话摘要');
+  assert.deepEqual(fs.readdirSync(sb.workDir), ['digest.md'], 'cwd 里只有摘要');
+  const settings = JSON.parse(fs.readFileSync(path.join(sb.configDir, 'settings.json'), 'utf8'));
+  assert.deepEqual(settings.env, { ANTHROPIC_MODEL: 'x' });
+  assert.deepEqual(fs.readdirSync(sb.configDir), ['settings.json'], '不给 skill 副本');
+});
+
+// 摘要会进另一个模型的会话。`dida auth status` 的输出里带 token，
+// 原样贴过去等于把凭据交给判定 agent，也留在了 digest.md 里。
+test('摘要里的 token 被脱敏', () => {
+  const digest = buildDigest({
+    events: [
+      ASSISTANT([{ type: 'tool_use', id: 'a', name: 'PowerShell', input: { command: 'dida auth status' } }]),
+      RESULT('a', '✓ 已登录\n  Token: dp_48d71abc7930\n'),
+    ],
+  });
+  assert.doesNotMatch(digest, /dp_48d71abc7930/);
+  assert.match(digest, /已登录/);
+  assert.match(digest, /已脱敏/);
 });

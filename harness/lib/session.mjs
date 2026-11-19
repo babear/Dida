@@ -63,7 +63,7 @@ export function toolFaceOf(agentsPath, agentName = AGENT_NAME) {
   return agent.tools;
 }
 
-export function buildSessionArgv({ prompt, agentsPath, agentName = AGENT_NAME, addDirs = [] }) {
+export function buildSessionArgv({ prompt, agentsPath, agentName = AGENT_NAME }) {
   return [
     '-p',
     prompt,
@@ -75,9 +75,6 @@ export function buildSessionArgv({ prompt, agentsPath, agentName = AGENT_NAME, a
     toolFaceOf(agentsPath, agentName).join(','),
     '--permission-mode',
     'dontAsk',
-    // 读 cwd 之外的目录要显式授权：dontAsk 下 Read 碰到没授权的路径会被拒。
-    // 被测 agent 只读 cwd（运行目录的 work/），用不上它；判定 agent 要读 runs/<runId>/。
-    ...(addDirs.length > 0 ? ['--add-dir', ...addDirs] : []),
     '--output-format',
     'stream-json',
     '--verbose',
