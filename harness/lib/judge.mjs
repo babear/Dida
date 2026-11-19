@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { buildSessionArgv, parseTranscript, runSession, sanitizeEnv, sessionCompleted } from './session.mjs';
+import { JUDGE_SANDBOX, sandboxDirOf } from './sandbox.mjs';
 
 export const JUDGE_AGENT_NAME = 'dida-judge';
 
@@ -112,11 +113,12 @@ export function buildDigest({ events = [], calls = [] }) {
   return lines.join('\n').trimEnd();
 }
 
-// 判定 agent 的沙箱：run-<runId>/judge/。它只放 cwd（空的 work/）与一份摘要，
+// 判定 agent 的沙箱：与 scenario/ 并列的 judge/。cwd 里只有一份摘要，
 // skill 副本、materials、shim 都不在这里——judge 评的是会话，不是去读被测的那份 skill。
 // config 里只留 ANTHROPIC_* 键：与被测会话同一个模型与凭据，跨运行才可比。
-export function createJudgeSandbox({ runDir, anthropicEnv, digest }) {
-  const root = path.join(runDir, 'judge');
+// 路径规则复用 sandboxDirOf：两个沙箱必须落在同一个运行目录下，别各写一份。
+export function createJudgeSandbox({ runId, anthropicEnv, digest }) {
+  const root = sandboxDirOf(runId, JUDGE_SANDBOX);
   const workDir = path.join(root, 'work');
   const configDir = path.join(root, 'config');
   fs.mkdirSync(workDir, { recursive: true });

@@ -129,7 +129,10 @@ function sandboxFixture(t) {
   return { dir, skillPath, agentsSourcePath, settingsPath, runId };
 }
 
-test('createSandbox 的落点与 sandboxRootOf 一致', (t) => {
+// 层级（#10 修正）：运行目录 run-<runId>/ 是这次运行的总容器，本身不承载任何 agent 的 cwd。
+// 下面并列两个沙箱：scenario/（被测 agent）与 judge/（判定 agent）。
+// 之前 run-<runId>/ 直接就是被测沙箱的根，judge 再塞进去就成了三层混叠。
+test('被测沙箱落在运行目录的 scenario/ 下，与 judge/ 并列', (t) => {
   const { skillPath, agentsSourcePath, settingsPath, runId } = sandboxFixture(t);
   const sandbox = createSandbox({
     runId,
@@ -141,7 +144,8 @@ test('createSandbox 的落点与 sandboxRootOf 一致', (t) => {
   });
   t.after(() => fs.rmSync(sandbox.root, { recursive: true, force: true }));
 
-  assert.equal(sandbox.root, sandboxRootOf(runId), '两处路径规则必须一致');
+  assert.equal(sandbox.root, path.join(sandboxRootOf(runId), 'scenario'));
+  assert.equal(path.dirname(sandbox.root), sandboxRootOf(runId), '沙箱的上一层就是运行目录');
 });
 
 // 新布局的核心约束：cwd（work/）里只有 materials，shim、配置、工具面定义都在它的

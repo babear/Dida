@@ -76,7 +76,8 @@ prompt 里给出轨迹路径、调用日志路径、用户原话与建出的任�
 
 **决定：**
 
-1. 判定 agent 有自己的沙箱 `run-<runId>/judge/`，cwd 是其中的 `work/`，里面**只有**一份 harness 抽好的摘要 `digest.md`；`config/` 只放 `ANTHROPIC_*` 键（与被测会话同模型同凭据）。它读不到 skill 副本、materials、shim 与原始轨迹。不再需要 `--add-dir`。
+1. 判定 agent 有自己的沙箱 `run-<runId>/judge/`，与被测 agent 的 `run-<runId>/scenario/` 并列。cwd 是其中的 `work/`，里面**只有**一份 harness 抽好的摘要 `digest.md`；`config/` 只放 `ANTHROPIC_*` 键（与被测会话同模型同凭据）。它读不到 skill 副本、materials、shim 与原始轨迹。不再需要 `--add-dir`。
+   - 这同时把「运行目录」与「沙箱」两个词分开：运行目录 `run-<runId>/` 是总容器，`scenario/` 与 `judge/` 是它下面的两个沙箱。此前 `run-<runId>/` 直接就是被测沙箱的根，judge 再塞进去就成了三层混叠。
 2. 摘要由 harness 从轨迹与调用日志生成：每次工具调用一行（名字 + 关键入参），附结果片段（截断 600 字）与 shim 记的真 argv。不放进 assistant 的正文与思考——判断依据是动作，不是它怎么想。约 10KB，是原始轨迹的 1/50。
 3. 摘要里的凭据类字段（`token:` / `secret:` / `password:` / `api_key:`）脱敏。`dida auth status` 的输出里就带 token，而摘要会进另一个模型会话。
 4. 摘要落在沙箱 cwd 里（`judge/work/digest.md`），与 `judge.ndjson` 一起留在 run 目录，事后可核对判定 agent 到底看到了什么。

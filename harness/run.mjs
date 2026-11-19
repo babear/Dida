@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { createSandbox, resolveRealDidaCmd, SKILL_NAME } from './lib/sandbox.mjs';
+import { createSandbox, resolveRealDidaCmd, sandboxRootOf, SKILL_NAME } from './lib/sandbox.mjs';
 import { parseCmdShim } from './lib/shim.mjs';
 import { buildSessionArgv, runSession, parseTranscript, sanitizeEnv, sessionCompleted, summarizeTranscript } from './lib/session.mjs';
 import { defaultSettingsPath, ensureRunsDir, gitState, modelInfo, runId } from './lib/provenance.mjs';
@@ -274,7 +274,7 @@ export function verdictLines(assertion) {
 }
 
 
-// 会话进程的启动参数。cwd 取 work/ 而不是整个运行目录——shim、配置、工具面定义都在
+// 会话进程的启动参数。cwd 取沙箱的 work/ 而不是沙箱根——shim、配置、工具面定义都在
 // 它的上一层，agent 列目录只看得到 materials/（#16）。这条装配关系是本改动的
 // 全部意义所在：它若改回 sandbox.root，agent 就重新看得到 shim 与配置。
 export function sessionEnvOf({ sandbox, callLogPath, createdFile }) {
@@ -443,7 +443,7 @@ async function runOne(options, scenario, projects, assertionFn, processFn, retry
   let judgement = null;
   if (needsJudgement(scenario.kind)) {
     const judgeSandbox = createJudgeSandbox({
-      runDir,
+      runId: runKey,
       anthropicEnv: sandbox.anthropicEnv,
       digest: buildDigest({ events, calls }),
     });
@@ -467,7 +467,8 @@ async function runOne(options, scenario, projects, assertionFn, processFn, retry
     kind: scenario.kind,
     // 探针目录里的 assert.mjs 不执行，报告要据此留一行提示（ADR-0015）。
     unusedAssert: scenario.kind === 'probe' && scenario.hasAssert,
-    sandbox: sandbox.root,
+    // 报告与控制台说「运行目录」时指的是 run-<runId>/，两个沙箱的公共父目录。
+    sandbox: sandboxRootOf(runKey),
     skill: {
       source: options.skillPath,
       sha256: sandbox.skillFingerprint.sha256,
@@ -735,13 +736,15 @@ async function attemptScenario({ id, scenario, options, projects, assertionFn, p
   writeReport(runDir, finalManifest);
   // 删除失败要让后面三处都说实话：manifest 的 sandboxRetained、报告的「运行目录已删除」、
   // 控制台的 (removed)。吞掉异常却仍报 removed，读报告的人会以为盘上没有残留。
+  // 删的是整个运行目录 run-<runId>/，不是其中某个沙箱：两个沙箱都在它下面，
+  // 只删 scenario/ 会让 judge/ 留在盘上没人管（#10）。
   let deleteError = null;
   if (!retained) {
     try {
-      fs.rmSync(sandbox.root, { recursive: true, force: true });
+      fs.rmSync(sandboxRootOf(runKey), { recursive: true, force: true });
     } catch (error) {
       deleteError = error.code ?? error.message;
-      console.error(`    运行目录删除失败（${deleteError}）：${sandbox.root}`);
+      console.error(`    运行目录删除失败（${deleteError}）：${sandboxRootOf(runKey)}`);
       writeManifest(runDir, { ...finalManifest, sandboxRetained: true, sandboxDeleteError: deleteError });
     }
   }
@@ -776,7 +779,7 @@ async function attemptScenario({ id, scenario, options, projects, assertionFn, p
   if (retry) console.log(`  重试：第 ${retry.attempt} 次，首次 ${retry.previousStatus}（run=${retry.previousRun}）`);
   console.log(`  skill sha256=${manifest.skill.sha256.slice(0, 16)} files=${manifest.skill.files} git=${manifest.skill.git.rev?.slice(0, 12)}${manifest.skill.git.dirty ? ' (dirty)' : ''}`);
   console.log(`  model alias=${manifest.model.requested_alias} provider=${manifest.model.provider}（别名不等于实际执行模型，真实映射见 manifest.model.alias_mapping）`);
-  console.log(`  sandbox=${sandbox.root}${retained || deleteError ? ' (retained)' : ' (removed)'}`);
+  console.log(`  sandbox=${sandboxRootOf(runKey)}${retained || deleteError ? ' (retained)' : ' (removed)'}`);
   console.log(`  transcript=${path.relative(repoRoot, manifest.transcript.path)} events=${manifest.transcript.events} toolCalls=${manifest.transcript.toolCalls}`);
   console.log(`  calls=${path.relative(repoRoot, manifest.calls.path)} total=${manifest.calls.total} rejected=${manifest.calls.rejected} outOfBounds=${manifest.calls.outOfBounds}`);
   console.log(`  created=${manifest.created.length} 条${manifest.created.length ? '：' + manifest.created.map((e) => e.id).join('、') : ''}`);

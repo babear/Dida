@@ -13,8 +13,12 @@ _Avoid_: 技能、prompt、文档
 _Avoid_: 测试、case、用例
 
 **运行目录**:
-每条 scenario 运行时在 `%TEMP%` 下建的一次性目录树，`run-<runId>/`。被测 agent 的 cwd 是它下面的 `work/`，skill、settings 与 shim 在同级的其它子目录里。**它不是隔离边界**：cwd 只决定相对路径的起点，文件系统其余部分仍可读写。
-_Avoid_: 沙箱、sandbox、隔离环境
+每条 scenario 运行时在 `%TEMP%` 下建的一次性目录树，`run-<runId>/`。它是这次运行的总容器，下面并列两个**沙箱**：`scenario/` 给被测 agent，`judge/` 给判定 agent。**它不是隔离边界**：cwd 只决定相对路径的起点，文件系统其余部分仍可读写。
+_Avoid_: 沙箱、sandbox、隔离环境（这两个词指运行目录下的 `scenario/` 与 `judge/`）
+
+**沙箱**:
+运行目录下的一个子目录，装着一个 agent 的 cwd（`work/`）、配置目录（`config/`）与它要用的文件。被测 agent 用 `scenario/`，判定 agent 用 `judge/`；两者互不可见，是结构上的分开而不是靠约定。**它同样不是隔离边界**，理由见「运行目录」。
+_Avoid_: 运行目录、隔离环境
 
 **被测 agent**:
 harness 为每条 scenario 启动的一次性 `claude -p` 子进程，它拿到的输入是用户原话和运行目录素材，此外没有别的提示。

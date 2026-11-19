@@ -16,6 +16,7 @@ import {
   reviewEntriesOf,
 } from './judge.mjs';
 import { needsJudgement } from '../run.mjs';
+import { sandboxRootOf } from './sandbox.mjs';
 
 // ─────────────────────────────────────────────────────────────────────────
 // 判定 agent 不参与判定（#10）：它的输出只写到报告里，退出码与 status 都不看它。
@@ -350,13 +351,14 @@ test('摘要带 dida 调用的 argv，不只是轨迹里的命令字符串', () 
 // 判定 agent 的沙箱（#10）放在 run-<runId>/judge/：cwd 里只有一份摘要，
 // config 里只有 ANTHROPIC_* 键。skill 副本、materials、shim 都不在这里。
 test('判定沙箱只给摘要与凭据，不给被测 skill 与 materials', (t) => {
-  const runDir = fs.mkdtempSync(path.join(os.tmpdir(), 'judge-sandbox-'));
-  t.after(() => fs.rmSync(runDir, { recursive: true, force: true }));
+  const runId = `judge-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  t.after(() => fs.rmSync(sandboxRootOf(runId), { recursive: true, force: true }));
 
-  const sb = createJudgeSandbox({ runDir, anthropicEnv: { ANTHROPIC_MODEL: 'x' }, digest: '# 会话摘要' });
+  const sb = createJudgeSandbox({ runId, anthropicEnv: { ANTHROPIC_MODEL: 'x' }, digest: '# 会话摘要' });
 
   assert.equal(path.dirname(sb.workDir), sb.root, 'work/ 在 judge/ 下');
-  assert.equal(path.dirname(sb.root), runDir, 'judge/ 在 run 目录下');
+  assert.equal(path.dirname(sb.root), sandboxRootOf(runId), 'judge/ 直接在运行目录下');
+  assert.equal(path.basename(sb.root), 'judge');
   assert.equal(fs.readFileSync(sb.digestPath, 'utf8').trim(), '# 会话摘要');
   assert.deepEqual(fs.readdirSync(sb.workDir), ['digest.md'], 'cwd 里只有摘要');
   const settings = JSON.parse(fs.readFileSync(path.join(sb.configDir, 'settings.json'), 'utf8'));
