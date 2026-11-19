@@ -92,6 +92,7 @@ node harness/replay.mjs --scenario <id> --run <runId>
 | `preset.mjs` | 可选，声明要建的任务，会话前由 harness 用真 CLI 执行 | 否 | 已有 |
 | `assert.mjs` | 结局断言，默认导出 `{tasks, created, calls, session} => 结果数组` | 否 | 已有 |
 | `process/<rule-id>/` | 可选，每条过程规则一个目录（`rule.mjs` + `RULE.md` + `evidence.ndjson`）；缺省则不判过程这一面 | 否 | 已有 |
+| `scenario.json` 的 `review` | 可选，人工复核条目（任务 id + 预期在客户端看到的内容）；只写报告，不进判定 | 否 | 已有 |
 
 加一条 scenario 就是加一个目录，harness 一行不用改（前提是 `assert.mjs` 与 `preset.mjs` 已实现）。目录形态与三面判定的完整理由见 ADR-0012。
 
@@ -145,6 +146,28 @@ node harness/replay.mjs --scenario <id> --run <runId>
 
 **越界写入不进判定。** shim 当场拒绝并把 `decision: 'rejected'` / `reason: 'out-of-bounds'` 写进调用日志，报告按原因单列次数——但它是**被拦住的尝试**，归因可能是 agent 用错命令、scenario 原话没点名测试清单、或 guard 表没覆盖这条命令，不是「skill 没做到」。判成 `FAILED` 会把这三类不该红的运行变红，所以它只进报告供人判断。
 
+### 质量评价与人工复核表
+
+判定链之后还有两段**只写报告、不进判定**的内容（见 ADR-0017）：
+
+- **质量评价**：会话结束后另起一个只读的判定 agent（`dida-judge`，工具面 `Read` / `Glob` / `Grep`），按绕路、冗余操作、先读后改三个固定维度作答。报告里是「## 质量评价」小节。
+  - 它读的是 harness 抽好的**会话摘要**（每次工具调用一行 + 结果片段 + shim 记的 dida argv，约 10KB），不是原始轨迹（实测 507KB）。凭据类字段（token 等）在摘要里脱敏。
+  - 它有**自己的沙箱** `run-<runId>/judge/`，与被测 agent 的 `scenario/` 并列：cwd 是 `work/`，里面只有那份摘要，`config/` 只放 `ANTHROPIC_*`。读不到被测 agent 的 skill 副本、materials 与原始轨迹——那些是噪音，会把评价往 skill 的措辞上带。
+- **人工复核表**：scenario 在 `scenario.json` 的 `review` 里声明条目，报告里是「## 人工复核」小节，每条给出任务 id 与预期在客户端看到的内容。
+
+两段都不产生 `status`，不影响 `ok`、退出码与清场门控。**判定 agent 失败时 scenario 结果不受影响**：报告照样有这一段，写「判定缺失」与原因（没能启动 / 没正常结束 / 轨迹读不出 / 没有结论文本 / 输出缺维度）。探针不启动判定 agent。判定 agent 用运行目录里那份 settings，与被测会话同一个模型与凭据。
+
+`review` 的形状：
+
+```json
+{
+  "prompt": "…",
+  "review": [{ "title": "周末露营准备", "expect": "标题、5 条检查事项、说明文本" }]
+}
+```
+
+条目可以写 `title`（由账本解析成任务 id）、也可以直接写 `id`；报告一律给出 id。标题对不上账本时报告写「未对上本次创建的任务」，不编造 id。缺字段的条目会在报告里被点名，但不中止运行——它是给人看的清单，不是判据。
+
 **顺序**：会话是否正常结束 → 可信度检查 → 取快照 ＋ 结局断言 → 过程断言。除 `PASSED` 外退出码都是 1。结局断言不过即终止，过程断言不跑——没做到的话，谈有没有绕远路没有意义。
 
 | 结果 | 含义 | 怎么修 |
@@ -164,16 +187,24 @@ node harness/replay.mjs --scenario <id> --run <runId>
 
 建在 `%TEMP%/run-<runId>/`，**不放在仓库内**：仓库子目录会继承父目录的 `CLAUDE.md` 与 `.claude/skills/`，后者的同名 skill 会与运行目录里的副本竞争。
 
+运行目录是这次运行的**总容器**，本身不承载任何 agent 的 cwd；下面并列两个沙箱（见 #10）：
+
 ```
 run-<runId>/
-├── work/                  # ← 被测 agent 的 cwd。只放它该看的
-│   └── materials/         # scenario 素材（若有）
-├── config/                # ← CLAUDE_CONFIG_DIR。不在 cwd 里
-│   ├── settings.json      # 只含源 settings.json 的 ANTHROPIC_* 键
-│   └── skills/dida-cli/   # 从 --skill-path 整体复制，末尾追加调用方标记
-├── agents.json            # 从 harness/agents.json 复制，--agents 指这里
-└── shim/                  # 前置到 PATH 的 shim：dida.ps1 + dida.cmd + dida-shim.mjs + lib/
+├── scenario/              # ← 被测 agent 的沙箱
+│   ├── work/              #   ← cwd。只放它该看的
+│   │   └── materials/     #     scenario 素材（若有）
+│   ├── config/            #   ← CLAUDE_CONFIG_DIR。不在 cwd 里
+│   │   ├── settings.json  #     只含源 settings.json 的 ANTHROPIC_* 键
+│   │   └── skills/dida-cli/  #  从 --skill-path 整体复制，末尾追加调用方标记
+│   ├── agents.json        #   从 harness/agents.json 复制，--agents 指这里
+│   └── shim/              #   前置到 PATH 的 shim：dida.ps1 + dida.cmd + dida-shim.mjs + lib/
+└── judge/                 # ← 判定 agent 的沙箱（仅 scenario；探针不跑判定）
+    ├── work/digest.md     #   cwd 里只有会话摘要
+    └── config/settings.json  # 只含 ANTHROPIC_* 键
 ```
+
+两个沙箱分开是结构上的保证：判定 agent 读不到被测 agent 的 skill 副本、materials 与原始轨迹。共用同一个根的话，隔离只能靠「能读哪些子目录」这条约定，容易破。
 
 **只有 `work/` 是 cwd。** shim、配置、工具面定义都在它的上一层——agent 的 `Get-ChildItem` 看不到它们，但仍通过 `PATH`、`CLAUDE_CONFIG_DIR`、`--agents` 正常生效（见 #16）。
 
@@ -243,11 +274,13 @@ run-<runId>/
 | 文件 | 内容 |
 |---|---|
 | `trace.ndjson` | 被测会话的原始轨迹 |
+| `judge.ndjson` | 判定 agent 的轨迹（仅 scenario；它的结论已写进报告，这里留原始输出供追溯） |
+| `judge/work/digest.md` | 给判定 agent 的会话摘要（它沙箱的 cwd；凭据已脱敏） |
 | `calls.ndjson` | shim 记下的调用序列，每行 `{argv, at, decision}`；被拒的另有 `reason` 与 `targets` |
 | `created.ndjson` | 本 run 建成并立刻记账的任务，一行一条；清场与断言都只认这一份 |
 | `state.json` | 终态快照：账本里每个 id 取回的现状，取不到的记 `null`。按测试清单枚举定位，枚举不到才回退账本的 `projectId`。断言读它。会话没正常结束时不取、不生成（前置门没过，判定链未开始）；会话正常结束时在结局断言那一刻取（早于清场），可信度检查不过时不取；列清单失败时不写这个文件（不写比写空数组诚实） |
 | `manifest.json` | 运行目录绝对路径、skill 指纹与文件数、git rev 与 dirty、三层模型信息、工具面、轮数、成本、调用数、创建数、清场结果、标记 |
-| `report.md` | 给人读的报告：首行是 skill 指纹 / 模型 / 运行目录路径，接着是判定结论与落败的断言，中间是本次创建的任务 id 表，末尾是摘要 |
+| `report.md` | 给人读的报告：首行是 skill 指纹 / 模型 / 运行目录路径，接着是判定结论与落败的断言，中间是本次创建的任务 id 表，末尾是摘要；判定与清场之后另有「质量评价」与「人工复核」两段（有才写） |
 
 `runs/` 已在 `.gitignore` 里。
 

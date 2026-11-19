@@ -51,6 +51,8 @@ export function loadScenario(repoRoot, id) {
     // 预设可选：没有它时行为不变，编排层按 null 走原路（#19）。
     hasPreset: fs.existsSync(path.join(found.dir, 'preset.mjs')),
     prompt: manifest.prompt,
+    // 人工复核表（#10）：只是声明，报告照着渲染。不校验形状——写错一条不该让整次运行停下。
+    review: manifest.review ?? null,
     materialsDir: fs.existsSync(materialsDir) ? materialsDir : null,
   };
 }

@@ -18,6 +18,7 @@ import { runPreset } from './lib/preset.mjs';
 import { resolveTestProjects } from './lib/projects.mjs';
 import { batchSummaryLines, summarizeBatch } from './lib/batch.mjs';
 import { formatValue, INCOMPLETE_FACT, invalidLabel, renderReport, retentionNote } from './lib/report.mjs';
+import { buildDigest, buildJudgePrompt, createJudgeSandbox, judgeRun, resolveReview, reviewEntriesOf } from './lib/judge.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const AGENTS_SOURCE_PATH = path.join(repoRoot, 'harness', 'agents.json');
@@ -273,7 +274,7 @@ export function verdictLines(assertion) {
 }
 
 
-// 会话进程的启动参数。cwd 取 work/ 而不是整个运行目录——shim、配置、工具面定义都在
+// 会话进程的启动参数。cwd 取沙箱的 work/ 而不是沙箱根——shim、配置、工具面定义都在
 // 它的上一层，agent 列目录只看得到 materials/（#16）。这条装配关系是本改动的
 // 全部意义所在：它若改回 sandbox.root，agent 就重新看得到 shim 与配置。
 export function sessionEnvOf({ sandbox, callLogPath, createdFile }) {
@@ -308,6 +309,13 @@ export async function loadScenarioAssertions(scenario) {
   return { assertionFn, processFn };
 }
 
+// 这一条要不要起判定 agent。抽成函数，测试才能在行为上钉住「探针不评质量」——
+// 住在 runOne 里的三元式只能靠读源码来验，而读源码的测试挡不住重排。
+// 探针没有判定要评：它的产物是给人写断言用的样本（ADR-0015）。
+export function needsJudgement(kind) {
+  return kind !== 'probe';
+}
+
 async function runOne(options, scenario, projects, assertionFn, processFn, retry = null) {
   const id = scenario.id;
   const runKey = runId();
@@ -316,6 +324,9 @@ async function runOne(options, scenario, projects, assertionFn, processFn, retry
   fs.mkdirSync(runDir, { recursive: true });
 
   const createdFile = path.join(runDir, 'created.ndjson');
+  // 人工复核表（#10）：条目在 scenario.json 的 review 里声明，只写报告，不参与判定。
+  // 此刻还不能解析任务 id（账本还没建），到会话跑完再对着 created 解析一次。
+  const reviewSpec = reviewEntriesOf(scenario.review);
 
   // 预设排在建运行目录之前（#19 / ADR-0012）：它只要本次清单、runId 与账本路径，
   // 这三样到这里都确定了；失败时也不必浪费一次建目录。
@@ -422,13 +433,43 @@ async function runOne(options, scenario, projects, assertionFn, processFn, retry
   // 把整份任务清单复制进 manifest。
   const { snapshot, ...verdictFields } = verdict;
 
+  // 质量评价（#10）：会话结束后另起一个只读的判定 agent。它只写报告，**不参与判定**：
+  // 这里拿到什么都只进 manifest，status 与退出码不看它。
+  // 失败折成 missing 而不是让 runOne 抛——抛了这次会话的结论、清场与报告全丢。
+  //
+  // 它读的是 harness 抽好的摘要，不是原始轨迹：轨迹里 1994 条事件全交给它，
+  // 等于把找线索的活推过去（实测 40 轮、$0.32，是被测会话的 2.5 倍）。
+  // 摘要落在判定 agent 自己的沙箱 run-<runId>/judge/ 里，cwd 是其中的 work/。
+  let judgement = null;
+  if (needsJudgement(scenario.kind)) {
+    const judgeSandbox = createJudgeSandbox({
+      runId: runKey,
+      runDir,
+      anthropicEnv: sandbox.anthropicEnv,
+      digest: buildDigest({ events, calls }),
+    });
+    judgement = await judgeRun({
+      prompt: buildJudgePrompt({
+        scenario: id,
+        prompt: scenario.prompt,
+        digestPath: judgeSandbox.digestPath,
+        created,
+      }),
+      agentsPath: sandbox.agentsPath,
+      transcriptPath: path.join(runDir, 'judge.ndjson'),
+      workDir: judgeSandbox.workDir,
+      configDir: judgeSandbox.configDir,
+    });
+  }
+
   const manifest = {
     run: runKey,
     scenario: id,
     kind: scenario.kind,
     // 探针目录里的 assert.mjs 不执行，报告要据此留一行提示（ADR-0015）。
     unusedAssert: scenario.kind === 'probe' && scenario.hasAssert,
-    sandbox: sandbox.root,
+    // 报告与控制台说「运行目录」时指的是 run-<runId>/，两个沙箱的公共父目录。
+    sandbox: sandbox.runRoot,
     skill: {
       source: options.skillPath,
       sha256: sandbox.skillFingerprint.sha256,
@@ -458,6 +499,11 @@ async function runOne(options, scenario, projects, assertionFn, processFn, retry
       crossCheck: credibility,
     },
     created,
+    // 质量评价与人工复核表（#10）：两段都只写报告，不参与判定。
+    // 缺它们时不写字段，旧 manifest 也就不会多出两段空标题。
+    // 复核条目在这里对着账本解析出任务 id（AC 要求每条给出 id）。
+    ...(judgement ? { judgement } : {}),
+    ...(reviewSpec.length > 0 ? { review: resolveReview(reviewSpec, created) } : {}),
     // status 三态：not-taken（判定链在前一面就停了，没取）/ failed（取了但失败）/
     // ok（取到了）。count 为 null 表示「没有可数的事实」——前两种都落 null，与「取到了、0 条」区分开。
     state: {
@@ -502,6 +548,17 @@ function safeStringify(value) {
     };
     return JSON.stringify(substitute(value), null, 2);
   }
+}
+
+// 这次运行算不算成功。抽成纯函数是为了把「判定之外的失败」与「判定结论」分开说：
+// 除了 passed/sampled，清场问题与会话没跑完也要算进这一条（它们是「这次运行能不能用」
+// 的一部分，不能因为结论写着 passed 就报绿）。
+//
+// 质量评价与人工复核**不在**这里（#10）：它们只写报告，判定 agent 挂掉也不该
+// 把一次通过的运行变红。
+export function verdictUsable({ status, kind = 'scenario', completed, cleanupProblem, deleteError }) {
+  const okStatus = status === (kind === 'probe' ? 'sampled' : 'passed');
+  return okStatus && completed && !cleanupProblem && !deleteError;
 }
 
 // 跑前清场：找到同一条用例**最近一次**未清场的 run（问题 3）。
@@ -680,13 +737,15 @@ async function attemptScenario({ id, scenario, options, projects, assertionFn, p
   writeReport(runDir, finalManifest);
   // 删除失败要让后面三处都说实话：manifest 的 sandboxRetained、报告的「运行目录已删除」、
   // 控制台的 (removed)。吞掉异常却仍报 removed，读报告的人会以为盘上没有残留。
+  // 删的是整个运行目录 run-<runId>/，不是其中某个沙箱：两个沙箱都在它下面，
+  // 只删 scenario/ 会让 judge/ 留在盘上没人管（#10）。
   let deleteError = null;
   if (!retained) {
     try {
-      fs.rmSync(sandbox.root, { recursive: true, force: true });
+      fs.rmSync(sandbox.runRoot, { recursive: true, force: true });
     } catch (error) {
       deleteError = error.code ?? error.message;
-      console.error(`    运行目录删除失败（${deleteError}）：${sandbox.root}`);
+      console.error(`    运行目录删除失败（${deleteError}）：${sandbox.runRoot}`);
       writeManifest(runDir, { ...finalManifest, sandboxRetained: true, sandboxDeleteError: deleteError });
     }
   }
@@ -699,7 +758,14 @@ async function attemptScenario({ id, scenario, options, projects, assertionFn, p
   //            invalid 是结果不可用，三者都要人看一眼。
   //   探针：只有 sampled 是 0。incomplete / invalid 说明这份样本不能用，
   //        1 就是在告诉脚本「别拿它写断言」。
-  const ok = manifest.assertion.status === (scenario.kind === 'probe' ? 'sampled' : 'passed');
+  // 质量评价与人工复核表不在其中（#10）：判定 agent 挂掉只让报告少一段。
+  const ok = verdictUsable({
+    status: manifest.assertion.status,
+    kind: scenario.kind,
+    completed,
+    cleanupProblem,
+    deleteError,
+  });
 
   const verdict = scenario.kind === 'probe'
     ? { sampled: 'SAMPLED', incomplete: 'INCOMPLETE', invalid: 'INVALID' }[manifest.assertion.status]
@@ -714,7 +780,7 @@ async function attemptScenario({ id, scenario, options, projects, assertionFn, p
   if (retry) console.log(`  重试：第 ${retry.attempt} 次，首次 ${retry.previousStatus}（run=${retry.previousRun}）`);
   console.log(`  skill sha256=${manifest.skill.sha256.slice(0, 16)} files=${manifest.skill.files} git=${manifest.skill.git.rev?.slice(0, 12)}${manifest.skill.git.dirty ? ' (dirty)' : ''}`);
   console.log(`  model alias=${manifest.model.requested_alias} provider=${manifest.model.provider}（别名不等于实际执行模型，真实映射见 manifest.model.alias_mapping）`);
-  console.log(`  sandbox=${sandbox.root}${retained || deleteError ? ' (retained)' : ' (removed)'}`);
+  console.log(`  sandbox=${sandbox.runRoot}${retained || deleteError ? ' (retained)' : ' (removed)'}`);
   console.log(`  transcript=${path.relative(repoRoot, manifest.transcript.path)} events=${manifest.transcript.events} toolCalls=${manifest.transcript.toolCalls}`);
   console.log(`  calls=${path.relative(repoRoot, manifest.calls.path)} total=${manifest.calls.total} rejected=${manifest.calls.rejected} outOfBounds=${manifest.calls.outOfBounds}`);
   console.log(`  created=${manifest.created.length} 条${manifest.created.length ? '：' + manifest.created.map((e) => e.id).join('、') : ''}`);
@@ -725,13 +791,12 @@ async function attemptScenario({ id, scenario, options, projects, assertionFn, p
   console.log(`  run dir=${path.relative(repoRoot, runDir)}`);
   if (!completed) console.log(`  session exit=${session.exitCode} timedOut=${session.timedOut}`);
 
-  // 除了判定结论，清场问题与会话没跑完也要算进这一条的 ok：
-  // 它们是「这次运行能不能用」的一部分，不能因为结论写着 passed 就报绿。
+  // ok 已把判定结论、会话收尾、清场与运行目录删除一起算进去了（见 verdictUsable）。
   return {
     run,
     status: manifest.assertion.status,
     defer,
-    ok: ok && completed && !cleanupProblem && !deleteError,
+    ok,
   };
 }
 

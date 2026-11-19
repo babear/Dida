@@ -542,3 +542,103 @@ test('重试通过不改变判定结论：仍写「通过」', () => {
   assert.match(report, /结局断言 通过/);
   assert.doesNotMatch(report, /未通过/);
 });
+
+// ─────────────────────────────────────────────────────────────────────────
+// 质量评价与人工复核表（#10）：两段都只写报告，不参与判定。
+// 加不加这两段，同一 scenario 的退出码必须一致——它们是给人看的，
+// 不是第四个断言面。
+// ─────────────────────────────────────────────────────────────────────────
+
+function reviewedManifest(overrides = {}) {
+  return {
+    ...MANIFEST,
+    assertion: { status: 'passed', results: [] },
+    judgement: {
+      status: 'ok',
+      text: '## 绕路\n第 3 条先建了 CHECKLIST 再删掉。\n\n## 冗余操作\n第 5、7 条重复读了同一个文件。\n\n## 先读后改\n每个任务都先读了。',
+      dimensions: [
+        { key: 'detour', label: '绕路', body: '第 3 条先建了 CHECKLIST 再删掉。' },
+        { key: 'redundant', label: '冗余操作', body: '第 5、7 条重复读了同一个文件。' },
+        { key: 'read-before-write', label: '先读后改', body: '每个任务都先读了。' },
+      ],
+    },
+    review: [
+      { title: 'CHECKLIST 任务', id: 'aaaa00000000000000000001', expect: '标题、5 条检查事项、说明文本' },
+    ],
+    ...overrides,
+  };
+}
+
+test('报告含质量评价段落，三个维度各一节', () => {
+  const report = renderReport(reviewedManifest());
+  assert.match(report, /## 质量评价/);
+  assert.match(report, /### 绕路/);
+  assert.match(report, /### 冗余操作/);
+  assert.match(report, /### 先读后改/);
+  assert.match(report, /第 3 条先建了 CHECKLIST 再删掉/);
+});
+
+test('报告含人工复核清单，每条给出任务 id 与预期看到的内容', () => {
+  const report = renderReport(reviewedManifest());
+  assert.match(report, /## 人工复核/);
+  assert.match(report, /aaaa00000000000000000001/);
+  assert.match(report, /5 条检查事项/);
+});
+
+// AC：判定 agent 失败时 scenario 结果不受影响，报告注明判定缺失。
+test('判定缺失时报告写明缺失原因，而不是省略这一段', () => {
+  const report = renderReport(reviewedManifest({
+    judgement: { status: 'missing', reason: '判定 agent 没正常结束（退出码 2）' },
+  }));
+  assert.match(report, /## 质量评价/);
+  assert.match(report, /判定缺失/);
+  assert.match(report, /退出码 2/);
+});
+
+// 「缺失」与「未观察到」是两件事：前者是判定没做成，后者是判定做了、说没发现问题。
+test('判定缺失不等于三个维度都说未观察到', () => {
+  const report = renderReport(reviewedManifest({
+    judgement: { status: 'missing', reason: 'x' },
+  }));
+  assert.doesNotMatch(report, /### 绕路/);
+});
+
+// 旧 manifest 没有这两段：报告不该凭空补一段空标题。
+test('没有判定与复核段的旧 manifest 不渲染这两节', () => {
+  const report = renderReport({ ...MANIFEST, assertion: { status: 'passed', results: [] } });
+  assert.doesNotMatch(report, /## 质量评价/);
+  assert.doesNotMatch(report, /## 人工复核/);
+});
+
+test('复核条目解析不到任务时明说，不写成一条没有 id 的条目', () => {
+  const report = renderReport(reviewedManifest({
+    review: [{ title: '没对上', id: null, unresolved: true, expect: 'x' }],
+  }));
+  assert.match(report, /未对上本次创建的任务/);
+  assert.match(report, /没对上/);
+});
+
+test('人工复核条目缺字段时报告点出来，不静默丢掉', () => {
+  const report = renderReport(reviewedManifest({
+    review: [{ title: '只有标题', missingFields: ['expect'] }],
+  }));
+  assert.match(report, /只有标题/);
+  assert.match(report, /条目缺 `expect`/);
+});
+
+// 缺 title、有 expect 时只能说缺 title：说成「缺 title 与 expect」是把已有字段说没了。
+test('缺 title 的复核条目只说缺 title', () => {
+  const report = renderReport(reviewedManifest({
+    review: [{ expect: '有预期没标题', missingFields: ['title'] }],
+  }));
+  assert.match(report, /条目缺 `title`/);
+  assert.doesNotMatch(report, /`expect`/);
+});
+
+// 这两段不参与判定：判定结论行的措辞不因它们存在而改变。
+test('两段在场时判定结论仍只写判定那句话', () => {
+  const report = renderReport(reviewedManifest());
+  assert.match(report, /结局断言 通过/);
+  assert.doesNotMatch(report, /质量评价 未通过/);
+  assert.doesNotMatch(report, /人工复核 未通过/);
+});

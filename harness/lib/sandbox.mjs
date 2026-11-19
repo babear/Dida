@@ -111,29 +111,42 @@ export function writeShim(binDir, realDidaCmd, allowedProjects) {
   return { program: parsed.program, script: parsed.script };
 }
 
-// 运行目录的落点。createSandbox 与测试共用同一条路径规则，只在这里定义一次——
+// 运行目录的落点。被测沙箱、判定沙箱与测试共用同一条路径规则，只在这里定义一次——
 // 两处各写一份的话，改了一处而漏另一处，症状是目录留在盘上没人管。
 export function sandboxRootOf(runId) {
   return path.join(os.tmpdir(), `run-${runId}`);
 }
 
-// 运行目录分两块，只有 work/ 会进入被测 agent 的视野：
+// 运行目录 run-<id>/ 是这次运行的总容器，本身不承载任何 agent 的 cwd。
+// 下面并列两个沙箱，各自有 work/（cwd）与 config/（CLAUDE_CONFIG_DIR）：
 //
 //   run-<id>/
-//   ├── work/            ← cwd。agent 站在这，看得到这里的一切
-//   │   └── materials/        scenario 素材（任务要读的就是它）
-//   ├── config/          ← CLAUDE_CONFIG_DIR。skill 与 settings 从这读，不在 cwd 里
-//   │   ├── settings.json
-//   │   └── skills/dida-cli/
-//   ├── agents.json      ← --agents 指的文件，读完就完事
-//   └── shim/            ← PATH 前置，命令能被找到但目录不可见
+//   ├── scenario/        ← 被测 agent 的沙箱
+//   │   ├── work/            ← cwd。agent 站在这，看得到这里的一切
+//   │   │   └── materials/       scenario 素材（任务要读的就是它）
+//   │   ├── config/          ← skill 与 settings 从这读，不在 cwd 里
+//   │   │   ├── settings.json
+//   │   │   └── skills/dida-cli/
+//   │   ├── agents.json      ← --agents 指的文件，读完就完事
+//   │   └── shim/            ← PATH 前置，命令能被找到但目录不可见
+//   └── judge/           ← 判定 agent 的沙箱，只有 work/digest.md 与 config/
 //
-// 早先四样都建在 root 下、又拿 root 当 cwd，等于把 shim、配置、工具面定义全摆在
-// agent 面前。它确实会去翻（实测 `Get-ChildItem -Force -Recurse materials, .claude, bin`），
+// 早先四样都建在根下、又拿根当 cwd，等于把 shim、配置、工具面定义全摆在 agent 面前。
+// 它确实会去翻（实测 `Get-ChildItem -Force -Recurse materials, .claude, bin`），
 // 看到就可能有下一步动作（#16）。挪出去不是安全边界——agent 有 PowerShell，
 // 绝对路径仍读得到（#3）——而是让"无意看到"不再发生，而实测里那正是唯一发生的事。
+//
+// 两个沙箱分开而不是共用一个根：共用时判定的隔离只能靠「这个 agent 能读哪些子目录」
+// 这条易破的约定，而分目录是结构上的保证，不用记得约束（#10）。
+const SCENARIO_SANDBOX = 'scenario';
+export const JUDGE_SANDBOX = 'judge';
+
+export function sandboxDirOf(runId, name) {
+  return path.join(sandboxRootOf(runId), name);
+}
+
 export function createSandbox({ runId, skillPath, agentsSourcePath, scenario, settingsPath, testProjects }) {
-  const root = sandboxRootOf(runId);
+  const root = sandboxDirOf(runId, SCENARIO_SANDBOX);
   const workDir = path.join(root, 'work');
   const configDir = path.join(root, 'config');
   const binDir = path.join(root, 'shim');
@@ -169,6 +182,10 @@ export function createSandbox({ runId, skillPath, agentsSourcePath, scenario, se
   }
 
   return {
+    // 运行目录（run-<id>/）与被测沙箱（run-<id>/scenario/）是两个不同的落点，
+    // 都要从这里拿：调用方自己按 runId 再拼一次，就会出现「一个用 runId、一个用局部
+    // 变量名」的错配，而那类错配跑起来才炸。
+    runRoot: path.dirname(root),
     root,
     workDir,
     configDir,

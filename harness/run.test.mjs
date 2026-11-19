@@ -21,6 +21,7 @@ import {
   stateLine,
   takeState,
   verdictLines,
+  verdictUsable,
   withPrependedPath,
   writeManifest,
   writeUnusableRun,
@@ -1022,4 +1023,24 @@ test('重试的每一次都各交一条结论，首次保留的现场不会被�
   // runWithRetry 交出的是最终结论 + 全部尝试；保留清单要按每次尝试的 defer 收，
   // 而不是只看最终那次。
   assert.deepEqual(outcome.attempts.map((a) => [a.run, a.defer]), [['r1', true], ['r2', false]]);
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// 质量评价与人工复核表接了线，但不进判定（#10）。
+// 这两条守的是 AC：「加不加这两段，同一 scenario 的退出码一致」
+// 与「判定 agent 失败时 scenario 结果不受影响」。
+// ─────────────────────────────────────────────────────────────────────────
+
+// AC：加不加质量评价与人工复核这两段，同一 scenario 的退出码一致。
+// verdictUsable 的入参里根本没有它们的位置——这条钉的是「它们进不来」，
+// 而不是「传进来会被忽略」：后者换个实现就悄悄失效。
+test('verdictUsable 只看判定结论、会话收尾、清场与目录删除', () => {
+  const base = { completed: true, cleanupProblem: false, deleteError: null };
+  assert.equal(verdictUsable({ ...base, status: 'passed' }), true);
+  assert.equal(verdictUsable({ ...base, status: 'passed', kind: 'probe' }), false, '探针的成功词是 sampled');
+  assert.equal(verdictUsable({ ...base, status: 'sampled', kind: 'probe' }), true);
+  assert.equal(verdictUsable({ ...base, status: 'failed' }), false);
+  assert.equal(verdictUsable({ ...base, status: 'passed', completed: false }), false);
+  assert.equal(verdictUsable({ ...base, status: 'passed', cleanupProblem: true }), false);
+  assert.equal(verdictUsable({ ...base, status: 'passed', deleteError: 'EPERM' }), false);
 });

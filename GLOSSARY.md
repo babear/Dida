@@ -13,8 +13,12 @@ _Avoid_: 技能、prompt、文档
 _Avoid_: 测试、case、用例
 
 **运行目录**:
-每条 scenario 运行时在 `%TEMP%` 下建的一次性目录树，`run-<runId>/`。被测 agent 的 cwd 是它下面的 `work/`，skill、settings 与 shim 在同级的其它子目录里。**它不是隔离边界**：cwd 只决定相对路径的起点，文件系统其余部分仍可读写。
-_Avoid_: 沙箱、sandbox、隔离环境
+每条 scenario 运行时在 `%TEMP%` 下建的一次性目录树，`run-<runId>/`。它是这次运行的总容器，下面并列两个**沙箱**：`scenario/` 给被测 agent，`judge/` 给判定 agent。**它不是隔离边界**：cwd 只决定相对路径的起点，文件系统其余部分仍可读写。
+_Avoid_: 沙箱、sandbox、隔离环境（这两个词指运行目录下的 `scenario/` 与 `judge/`）
+
+**沙箱**:
+运行目录下的一个子目录，装着一个 agent 的 cwd（`work/`）、配置目录（`config/`）与它要用的文件。被测 agent 用 `scenario/`，判定 agent 用 `judge/`；两者互不可见，是结构上的分开而不是靠约定。**它同样不是隔离边界**，理由见「运行目录」。
+_Avoid_: 运行目录、隔离环境
 
 **被测 agent**:
 harness 为每条 scenario 启动的一次性 `claude -p` 子进程，它拿到的输入是用户原话和运行目录素材，此外没有别的提示。
@@ -24,8 +28,16 @@ _Avoid_: 子 agent、测试 agent、worker
 在被测 agent 结束后读取其轨迹、给出质量评分的独立会话。它不参与判定通过或失败。
 _Avoid_: 评委、judge（除非指代码模块 `judge.mjs`）
 
+**质量评价**:
+判定 agent 写进报告的一段文字，按绕路、冗余操作、先读后改三个固定维度各一节。只写报告，不进判定，也不进退出码。
+_Avoid_: 评分、打分、质量报告、分数、评价（那是「判定」一词明令避免的别名）
+
+**人工复核表**:
+报告里列出「必须去滴答客户端看一眼」的条目，每条给出任务 id 与预期看到的内容，用来验证「正文在客户端是否渲染」这类无法自动化的判断。条目在 `scenario.json` 的 `review` 里声明，任务可写标题（由账本解析成 id）或直接写 id。只写报告，不进判定。
+_Avoid_: 复核清单、人工检查单、验收表
+
 **轨迹**:
-被测 agent 一次会话产生的 `stream-json` NDJSON 原文，包含每次工具调用的入参与结果。
+被测 agent 一次会话产生的 `stream-json` NDJSON 原文，包含每次工具调用的入参与结果。判定 agent 的轨迹另存为 `judge.ndjson`。
 _Avoid_: 日志、log、trace（除非指文件名 `trace.ndjson`）
 
 **调用日志**:
@@ -33,7 +45,7 @@ shim 记下的 `dida` 调用序列，`runs/<runId>/calls.ndjson`，每行一条 
 _Avoid_: 记录、shim 日志
 
 **工具面**:
-被测 agent 启动时被授予的工具名集合，由 `harness/agents.json` 定义。本项目的工具面是 `Skill`、`PowerShell`、`Read`、`Glob`、`Grep`；**不含 `Bash`**——shim 没有 bash 形态，可信度检查只从 `PowerShell` 调用里找 dida 命令（见 #37）。**也不含 `Write`**——没有 scenario 需要写文件，而它能直接覆写越界防护的白名单（见 #16）。
+被测 agent 启动时被授予的工具名集合，由 `harness/agents.json` 定义。本项目的工具面是 `Skill`、`PowerShell`、`Read`、`Glob`、`Grep`；**不含 `Bash`**——shim 没有 bash 形态，可信度检查只从 `PowerShell` 调用里找 dida 命令（见 #37）。**也不含 `Write`**——没有 scenario 需要写文件，而它能直接覆写越界防护的白名单（见 #16）。判定 agent 有自己的一份，只读：`Read`、`Glob`、`Grep`。
 _Avoid_: 工具箱、权限、allowedTools（除非指命令行参数）
 
 **shell**:
