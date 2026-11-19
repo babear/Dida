@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { createSandbox, resolveRealDidaCmd, sandboxRootOf, SKILL_NAME } from './lib/sandbox.mjs';
+import { createSandbox, resolveRealDidaCmd, SKILL_NAME } from './lib/sandbox.mjs';
 import { parseCmdShim } from './lib/shim.mjs';
 import { buildSessionArgv, runSession, parseTranscript, sanitizeEnv, sessionCompleted, summarizeTranscript } from './lib/session.mjs';
 import { defaultSettingsPath, ensureRunsDir, gitState, modelInfo, runId } from './lib/provenance.mjs';
@@ -444,6 +444,7 @@ async function runOne(options, scenario, projects, assertionFn, processFn, retry
   if (needsJudgement(scenario.kind)) {
     const judgeSandbox = createJudgeSandbox({
       runId: runKey,
+      runDir,
       anthropicEnv: sandbox.anthropicEnv,
       digest: buildDigest({ events, calls }),
     });
@@ -468,7 +469,7 @@ async function runOne(options, scenario, projects, assertionFn, processFn, retry
     // 探针目录里的 assert.mjs 不执行，报告要据此留一行提示（ADR-0015）。
     unusedAssert: scenario.kind === 'probe' && scenario.hasAssert,
     // 报告与控制台说「运行目录」时指的是 run-<runId>/，两个沙箱的公共父目录。
-    sandbox: sandboxRootOf(runKey),
+    sandbox: sandbox.runRoot,
     skill: {
       source: options.skillPath,
       sha256: sandbox.skillFingerprint.sha256,
@@ -741,10 +742,10 @@ async function attemptScenario({ id, scenario, options, projects, assertionFn, p
   let deleteError = null;
   if (!retained) {
     try {
-      fs.rmSync(sandboxRootOf(runKey), { recursive: true, force: true });
+      fs.rmSync(sandbox.runRoot, { recursive: true, force: true });
     } catch (error) {
       deleteError = error.code ?? error.message;
-      console.error(`    运行目录删除失败（${deleteError}）：${sandboxRootOf(runKey)}`);
+      console.error(`    运行目录删除失败（${deleteError}）：${sandbox.runRoot}`);
       writeManifest(runDir, { ...finalManifest, sandboxRetained: true, sandboxDeleteError: deleteError });
     }
   }
@@ -779,7 +780,7 @@ async function attemptScenario({ id, scenario, options, projects, assertionFn, p
   if (retry) console.log(`  重试：第 ${retry.attempt} 次，首次 ${retry.previousStatus}（run=${retry.previousRun}）`);
   console.log(`  skill sha256=${manifest.skill.sha256.slice(0, 16)} files=${manifest.skill.files} git=${manifest.skill.git.rev?.slice(0, 12)}${manifest.skill.git.dirty ? ' (dirty)' : ''}`);
   console.log(`  model alias=${manifest.model.requested_alias} provider=${manifest.model.provider}（别名不等于实际执行模型，真实映射见 manifest.model.alias_mapping）`);
-  console.log(`  sandbox=${sandboxRootOf(runKey)}${retained || deleteError ? ' (retained)' : ' (removed)'}`);
+  console.log(`  sandbox=${sandbox.runRoot}${retained || deleteError ? ' (retained)' : ' (removed)'}`);
   console.log(`  transcript=${path.relative(repoRoot, manifest.transcript.path)} events=${manifest.transcript.events} toolCalls=${manifest.transcript.toolCalls}`);
   console.log(`  calls=${path.relative(repoRoot, manifest.calls.path)} total=${manifest.calls.total} rejected=${manifest.calls.rejected} outOfBounds=${manifest.calls.outOfBounds}`);
   console.log(`  created=${manifest.created.length} 条${manifest.created.length ? '：' + manifest.created.map((e) => e.id).join('、') : ''}`);

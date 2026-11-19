@@ -354,7 +354,10 @@ test('判定沙箱只给摘要与凭据，不给被测 skill 与 materials', (t)
   const runId = `judge-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   t.after(() => fs.rmSync(sandboxRootOf(runId), { recursive: true, force: true }));
 
-  const sb = createJudgeSandbox({ runId, anthropicEnv: { ANTHROPIC_MODEL: 'x' }, digest: '# 会话摘要' });
+  const runDir = fs.mkdtempSync(path.join(os.tmpdir(), 'judge-rundir-'));
+  t.after(() => fs.rmSync(runDir, { recursive: true, force: true }));
+
+  const sb = createJudgeSandbox({ runId, runDir, anthropicEnv: { ANTHROPIC_MODEL: 'x' }, digest: '# 会话摘要' });
 
   assert.equal(path.dirname(sb.workDir), sb.root, 'work/ 在 judge/ 下');
   assert.equal(path.dirname(sb.root), sandboxRootOf(runId), 'judge/ 直接在运行目录下');
@@ -364,6 +367,8 @@ test('判定沙箱只给摘要与凭据，不给被测 skill 与 materials', (t)
   const settings = JSON.parse(fs.readFileSync(path.join(sb.configDir, 'settings.json'), 'utf8'));
   assert.deepEqual(settings.env, { ANTHROPIC_MODEL: 'x' });
   assert.deepEqual(fs.readdirSync(sb.configDir), ['settings.json'], '不给 skill 副本');
+  assert.equal(fs.readFileSync(sb.keptDigestPath, 'utf8').trim(), '# 会话摘要', 'run 目录里也要留一份，沙箱删了还查得到');
+  assert.equal(path.dirname(sb.keptDigestPath), runDir);
 });
 
 // 摘要会进另一个模型的会话。`dida auth status` 的输出里带 token，

@@ -182,6 +182,10 @@ export function createSandbox({ runId, skillPath, agentsSourcePath, scenario, se
   }
 
   return {
+    // 运行目录（run-<id>/）与被测沙箱（run-<id>/scenario/）是两个不同的落点，
+    // 都要从这里拿：调用方自己按 runId 再拼一次，就会出现「一个用 runId、一个用局部
+    // 变量名」的错配，而那类错配跑起来才炸。
+    runRoot: path.dirname(root),
     root,
     workDir,
     configDir,

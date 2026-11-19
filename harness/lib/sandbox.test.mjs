@@ -146,6 +146,9 @@ test('被测沙箱落在运行目录的 scenario/ 下，与 judge/ 并列', (t) 
 
   assert.equal(sandbox.root, path.join(sandboxRootOf(runId), 'scenario'));
   assert.equal(path.dirname(sandbox.root), sandboxRootOf(runId), '沙箱的上一层就是运行目录');
+  // 调用方一律从 runRoot 拿运行目录，不自己按 runId 再拼一次——2026-11-19 真跑时
+  // 就在那里把 runOne 的局部变量名写进了 attemptScenario，一路跑到控制台才炸。
+  assert.equal(sandbox.runRoot, sandboxRootOf(runId));
 });
 
 // 新布局的核心约束：cwd（work/）里只有 materials，shim、配置、工具面定义都在它的

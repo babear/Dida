@@ -117,7 +117,10 @@ export function buildDigest({ events = [], calls = [] }) {
 // skill 副本、materials、shim 都不在这里——judge 评的是会话，不是去读被测的那份 skill。
 // config 里只留 ANTHROPIC_* 键：与被测会话同一个模型与凭据，跨运行才可比。
 // 路径规则复用 sandboxDirOf：两个沙箱必须落在同一个运行目录下，别各写一份。
-export function createJudgeSandbox({ runId, anthropicEnv, digest }) {
+//
+// 摘要在 run 目录里另留一份副本：沙箱在 PASSED 时整个删掉，只放在沙箱里的话，
+// 事后想核对「判定 agent 当初看到的是不是这个」就没有依据了。
+export function createJudgeSandbox({ runId, runDir, anthropicEnv, digest }) {
   const root = sandboxDirOf(runId, JUDGE_SANDBOX);
   const workDir = path.join(root, 'work');
   const configDir = path.join(root, 'config');
@@ -126,7 +129,9 @@ export function createJudgeSandbox({ runId, anthropicEnv, digest }) {
   fs.writeFileSync(path.join(configDir, 'settings.json'), JSON.stringify({ env: anthropicEnv }, null, 2));
   const digestPath = path.join(workDir, 'digest.md');
   fs.writeFileSync(digestPath, `${digest}\n`);
-  return { root, workDir, configDir, digestPath };
+  const keptDigestPath = path.join(runDir, 'digest.md');
+  fs.writeFileSync(keptDigestPath, `${digest}\n`);
+  return { root, workDir, configDir, digestPath, keptDigestPath };
 }
 
 // 按三个固定标题切段。只认标题逐字相同的行：判定 agent 换个说法就说明它没按约定作答，
